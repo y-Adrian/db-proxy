@@ -43,6 +43,13 @@ set(MONITOR_SOURCES
     src/monitor/performance_analyzer.cpp
 )
 
+set(DIAGNOSTICS_SOURCES
+    src/diagnostics/mock_provider.cpp
+    src/diagnostics/prompt_builder.cpp
+    src/diagnostics/diagnostic_engine.cpp
+    src/diagnostics/report_generator.cpp
+)
+
 set(CLI_SOURCES
     src/cli/connection_config.cpp
     src/cli/shell.cpp
@@ -75,6 +82,15 @@ add_executable(dbcli ${CLI_SOURCES} ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SO
 
 # 压力测试
 add_executable(stress_test tests/stress_test.cpp ${POOL_SOURCES} ${CORE_SOURCES})
+
+# 诊断模块示例（Mock 模式）
+add_executable(diagnostics_demo
+    examples/diagnostics_demo.cpp
+    ${DIAGNOSTICS_SOURCES}
+    ${MONITOR_SOURCES}
+    ${POOL_SOURCES}
+    ${CORE_SOURCES}
+)
 
 # 链接库
 target_link_libraries(db-proxy pthread ssl crypto)
