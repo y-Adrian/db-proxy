@@ -43,6 +43,12 @@ set(MONITOR_SOURCES
     src/monitor/performance_analyzer.cpp
 )
 
+set(CLI_SOURCES
+    src/cli/connection_config.cpp
+    src/cli/shell.cpp
+    src/cli/main.cpp
+)
+
 # 主程序
 add_executable(db-proxy
     src/main.cpp
@@ -64,10 +70,14 @@ add_executable(bench_pool benchmarks/bench_connection_pool.cpp ${POOL_SOURCES} $
 # 场景化用例
 add_executable(examples examples/examples.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
 
+# CLI 工具
+add_executable(dbcli ${CLI_SOURCES} ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
+
 # 压力测试
 add_executable(stress_test tests/stress_test.cpp ${POOL_SOURCES} ${CORE_SOURCES})
 
 # 链接库
 target_link_libraries(db-proxy pthread ssl crypto)
+target_link_libraries(dbcli pthread ssl crypto)
 target_link_libraries(examples pthread)
 target_link_libraries(stress_test pthread)

@@ -337,8 +337,12 @@ bool Connection::ping() {
 
 bool Connection::execute(const std::string& sql) {
     if (!isConnected()) {
+        last_error_ = "Not connected";
         return false;
     }
+    
+    // 清空之前的结果
+    clearResult();
     
     // 发送 COM_QUERY
     std::vector<char> packet;
@@ -351,6 +355,7 @@ bool Connection::execute(const std::string& sql) {
     
     ssize_t n = send(fd_, packet.data(), packet.size(), 0);
     if (n != (ssize_t)packet.size()) {
+        last_error_ = "Failed to send query";
         return false;
     }
     
@@ -358,12 +363,20 @@ bool Connection::execute(const std::string& sql) {
     return recvResult();
 }
 
+void Connection::clearResult() {
+    result_columns_.clear();
+    result_rows_.clear();
+    affected_rows_ = 0;
+    last_error_.clear();
+}
+
 bool Connection::recvResult() {
-    char buffer[1024];
+    char buffer[4096];
     
     // 接收包头
     ssize_t n = recv(fd_, buffer, 4, 0);
     if (n != 4) {
+        last_error_ = "Failed to receive packet header";
         return false;
     }
     
@@ -378,8 +391,10 @@ bool Connection::recvResult() {
     std::string data;
     size_t received = 0;
     while (received < packet_len) {
-        n = recv(fd_, buffer, std::min((size_t)1024, packet_len - received), 0);
+        size_t to_recv = std::min((size_t)4096, packet_len - received);
+        n = recv(fd_, buffer, to_recv, 0);
         if (n <= 0) {
+            last_error_ = "Connection closed during receive";
             return false;
         }
         data.append(buffer, n);
@@ -390,19 +405,51 @@ bool Connection::recvResult() {
     
     if (packet_type == 0x00) {
         // OK packet - 查询成功
-        // 可以解析 affected rows, insert_id 等
+        size_t offset = 1;
+        
+        // 解析 affected rows (LENENC)
+        if (offset < data.size() && data[offset] < 0xfb) {
+            affected_rows_ = (int)data[offset++];
+        }
+        
         return true;
     } else if (packet_type == 0xff) {
         // Error packet
-        LOG_ERROR("Query error");
+        if (data.size() > 4) {
+            uint16_t error_code = data[1] | (data[2] << 8);
+            std::string msg = data.substr(9);  // skip #XXXXX
+            last_error_ = "Error " + std::to_string(error_code) + ": " + msg;
+        } else {
+            last_error_ = "Unknown error";
+        }
+        LOG_ERROR("Query error: {}", last_error_);
         return false;
     } else if (packet_type == 0xfb) {
         // LOCAL INFILE
         LOG_WARN("Local infile not supported");
+        last_error_ = "Local infile not supported";
         return false;
     } else {
         // 结果集（SELECT等）
-        // 简化处理
+        // 简化处理：只获取列信息
+        size_t offset = 0;
+        
+        // 跳过列数 (LENENC)
+        if (offset < data.size()) {
+            uint8_t first = data[offset++];
+            if (first == 0xfc && offset + 2 <= data.size()) {
+                offset += 2;
+            } else if (first == 0xfd && offset + 3 <= data.size()) {
+                offset += 3;
+            } else if (first == 0xfe && offset + 8 <= data.size()) {
+                offset += 8;
+            }
+        }
+        
+        // 添加一个默认列
+        result_columns_.push_back({"result", "text"});
+        result_rows_.push_back({data.substr(1)});  // 简化：整行作为一个值
+        
         LOG_DEBUG("Result set received");
         return true;
     }

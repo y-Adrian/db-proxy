@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <chrono>
 #include <memory>
 #include <atomic>
@@ -26,6 +27,12 @@ public:
         CLOSED          // 已关闭
     };
     
+    // 查询结果列
+    struct Column {
+        std::string name;
+        std::string type;
+    };
+    
     Connection(const std::string& host, uint16_t port,
                const std::string& user, const std::string& password,
                const std::string& database);
@@ -39,6 +46,13 @@ public:
     // 健康检查
     bool ping();
     bool execute(const std::string& sql);
+    
+    // 查询结果访问 (CLI 使用)
+    const std::vector<Column>& resultColumns() const { return result_columns_; }
+    const std::vector<std::vector<std::string>>& resultRows() const { return result_rows_; }
+    int affectedRows() const { return affected_rows_; }
+    const std::string& lastError() const { return last_error_; }
+    void clearResult();
     
     // 状态
     State state() const { return state_.load(); }
@@ -72,6 +86,12 @@ private:
     std::atomic<State> state_{State::IDLE};
     std::atomic<int> ref_count_{0};
     std::chrono::steady_clock::time_point last_active_;
+    
+    // 查询结果
+    std::vector<Column> result_columns_;
+    std::vector<std::vector<std::string>> result_rows_;
+    int affected_rows_{0};
+    std::string last_error_;
     
     static uint64_t next_id_;
 };
