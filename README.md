@@ -1,6 +1,6 @@
 # DB-Proxy: 高性能数据库连接池代理中间件
 
-基于 C++20 的高性能数据库连接池/代理中间件，适用于 MySQL 协议，适用于面试展示。
+基于 C++20 的高性能数据库连接池/代理中间件，同时支持 MySQL 和 PostgreSQL 协议，适用于面试展示。
 
 ## 项目亮点（面试要点）
 
@@ -47,10 +47,26 @@ ConnectionPtr ConnectionPool::getConnection(std::chrono::milliseconds timeout) {
 }
 ```
 
-### 3. MySQL 协议解析
+### 3. 多数据库协议支持
+
+#### MySQL 协议
 - **协议状态机**：处理握手、认证、查询流程
 - **LENENC 编码**：MySQL 特色的长度编码整数
 - **SQL 类型识别**：读写分离的基础
+
+#### PostgreSQL 协议
+- **端口 5432**：标准 PostgreSQL 端口
+- **SCRAM 认证**：更安全的认证机制
+- **预处理语句**：使用 `$1, $2` 占位符
+- **LISTEN/NOTIFY**：发布订阅机制
+- **COPY 协议**：高速批量数据传输
+- **丰富数据类型**：JSON、数组、范围类型
+
+```cpp
+// PostgreSQL 预处理语句
+conn->execute("SELECT * FROM users WHERE id = $1", {user_id});
+conn->execute("INSERT INTO orders VALUES ($1, $2, $3)", {order_id, product_id, quantity});
+```
 
 ### 4. 性能监控
 - **无锁计数器**：原子变量减少锁竞争
@@ -77,7 +93,7 @@ for (int i = 0; i < BUCKETS; ++i) {
 |------|------|
 | 语言 | C++20 |
 | 网络 | epoll, 非阻塞 IO, Reactor 模型 |
-| 数据库 | MySQL 协议, 连接池 |
+| 数据库 | MySQL 协议, PostgreSQL 协议, 连接池 |
 | 并发 | 多线程, 原子操作, 条件变量 |
 | 监控 | Prometheus 格式, 滑动窗口统计 |
 
@@ -88,11 +104,11 @@ db-proxy/
 ├── include/
 │   ├── core/          # 核心配置和日志
 │   ├── network/       # epoll 网络层
-│   ├── protocol/      # MySQL 协议解析
+│   ├── protocol/      # MySQL/PostgreSQL 协议解析
 │   ├── pool/          # 连接池管理
-│   └── monitor/        # 性能监控
+│   └── monitor/       # 性能监控
 └── src/
-    ├── main.cpp        # 主程序入口
+    ├── main.cpp       # 主程序入口
     └── ...
 ```
 
@@ -107,6 +123,69 @@ make -j4
 # 运行
 ./db-proxy
 ```
+
+## 数据库支持
+
+### MySQL
+
+```bash
+# 启动 MySQL 测试环境
+docker-compose -f docker-compose.yml up -d
+
+# 运行 MySQL 用例
+./examples
+
+# MySQL 默认配置
+host: 127.0.0.1
+port: 3306
+user: root
+password: (empty)
+database: test
+```
+
+### PostgreSQL
+
+```bash
+# 启动 PostgreSQL 测试环境
+docker-compose -f docker-compose-pg.yml up -d
+
+# 运行 PostgreSQL 用例
+./examples_pg
+
+# PostgreSQL 默认配置
+host: 127.0.0.1
+port: 5432
+user: postgres
+password: postgres
+database: test
+```
+
+## 示例代码
+
+### MySQL 用例
+
+```bash
+# 查看 MySQL 用例
+cat examples/examples.cpp
+```
+
+### PostgreSQL 用例
+
+```bash
+# 查看 PostgreSQL 用例
+cat examples/examples_pg.cpp
+```
+
+主要场景包括：
+- 基础连接池使用
+- 协议特性演示
+- 事务处理
+- 连接参数配置
+- LISTEN/NOTIFY 机制
+- COPY 批量导入
+- 健康检查
+- 多数据库管理
+- 性能监控
 
 ## 面试问答要点
 
@@ -140,6 +219,17 @@ make -j4
 - 根据 SQL 类型路由到对应池
 - 主从延迟处理（可选）
 
+### Q: MySQL 和 PostgreSQL 协议有什么区别？
+
+| 特性 | MySQL | PostgreSQL |
+|------|-------|------------|
+| 默认端口 | 3306 | 5432 |
+| 认证协议 | SHA256 | SCRAM/md5 |
+| 整数编码 | LENENC | 固定长度 |
+| 预处理占位符 | `?` | `$1, $2` |
+| 特殊机制 | LOAD DATA | COPY, LISTEN |
+| 数据类型 | 基础类型 | 丰富类型(范围/JSON) |
+
 ### Q: 性能瓶颈如何定位？
 - CPU 使用率：top/htop
 - 网络 IO：netstat/ss
@@ -155,9 +245,11 @@ make -j4
 4. **SQL 防火墙**：注入检测
 5. **缓存层**：Redis 集成
 6. **容器化**：Docker 部署
+7. **PostgreSQL 特有**：逻辑复制、流复制
 
 ## 参考资料
 
 - [Linux IO 多路复用详解](https://man7.org/linux/man-pages/man7/epoll.7.html)
 - [MySQL 协议文档](https://dev.mysql.com/doc/internals/en/client-server-protocol.html)
+- [PostgreSQL 协议文档](https://www.postgresql.org/docs/current/protocol.html)
 - [C++ 并发编程实战](https://en.cppreference.com/w/cpp/thread)
