@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: db-proxy-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: test
+      MYSQL_USER: dbproxy
+      MYSQL_PASSWORD: dbproxypass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command: --default-authentication-plugin=mysql_native_password
+
+  # 可选：启动 proxy 后自动测试
+  test:
+    image: alpine:latest
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./:/workspace
+    command: |
+      sh -c "apk add --no-cache mysql-client curl && 
+             echo 'Waiting for MySQL...' &&
+             sleep 10 &&
+             mysql -h mysql -u root -prootpassword -e 'SELECT 1' &&
+             echo 'MySQL connection OK'"
+
+volumes:
+  mysql_data:

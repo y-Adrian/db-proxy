@@ -68,6 +68,6 @@ add_executable(examples examples/examples.cpp ${POOL_SOURCES} ${MONITOR_SOURCES}
 add_executable(stress_test tests/stress_test.cpp ${POOL_SOURCES} ${CORE_SOURCES})
 
 # 链接库
-target_link_libraries(db-proxy pthread)
+target_link_libraries(db-proxy pthread ssl crypto)
 target_link_libraries(examples pthread)
 target_link_libraries(stress_test pthread)
