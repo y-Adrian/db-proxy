@@ -49,6 +49,7 @@ set(MONITOR_SOURCES
 
 set(DIAGNOSTICS_SOURCES
     src/diagnostics/mock_provider.cpp
+    src/diagnostics/ollama_provider.cpp
     src/diagnostics/prompt_builder.cpp
     src/diagnostics/diagnostic_engine.cpp
     src/diagnostics/report_generator.cpp
@@ -88,7 +89,7 @@ add_executable(dbcli ${CLI_SOURCES} ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SO
 # 压力测试
 add_executable(stress_test tests/stress_test.cpp ${POOL_SOURCES} ${CORE_SOURCES})
 
-# 诊断模块示例（Mock 模式）
+# 诊断模块示例（支持 Mock / Ollama 模式）
 add_executable(diagnostics_demo
     examples/diagnostics_demo.cpp
     ${DIAGNOSTICS_SOURCES}
