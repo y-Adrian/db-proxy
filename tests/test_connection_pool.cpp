@@ -9,7 +9,7 @@ using namespace dbproxy;
 std::atomic<int> success_count{0};
 std::atomic<int> fail_count{0};
 
-void worker(ConnectionPool& pool, int id) {
+void worker(ConnectionPool& pool) {
     for (int i = 0; i < 10; ++i) {
         auto conn = pool.getConnection(std::chrono::seconds(5));
         if (conn) {
@@ -45,7 +45,7 @@ int main() {
     auto start = std::chrono::steady_clock::now();
     
     for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back(worker, std::ref(pool), i);
+        threads.emplace_back(worker, std::ref(pool));
     }
     
     for (auto& t : threads) {

@@ -138,15 +138,14 @@ void example_concurrent_usage(const MySQLConfig& cfg) {
     std::atomic<int> success_count{0};
     std::atomic<int> fail_count{0};
     const int num_threads = 10;
-    const int queries_per_thread = 20;
 
     std::vector<std::thread> threads;
 
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back([&pool, &success_count, &fail_count, queries_per_thread, i]() {
-            for (int j = 0; j < queries_per_thread; ++j) {
+        threads.emplace_back([&pool, &success_count, &fail_count, i]() {
+            for (int j = 0; j < 20; ++j) {
                 auto conn = pool->getConnection(std::chrono::seconds(5));
                 if (conn) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));

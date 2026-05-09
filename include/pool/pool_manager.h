@@ -41,8 +41,8 @@ public:
     // 归还连接
     void returnConnection(const std::string& pool_name, ConnectionPtr conn);
     
-    // 路由选择（可扩展为读写分离）
-    std::shared_ptr<ConnectionPool> routePool(const std::string& sql_type);
+    // 路由选择（返回默认池，可扩展为读写分离）
+    std::shared_ptr<ConnectionPool> routePool();
     
     // 健康检查所有连接池
     void healthCheckAll();

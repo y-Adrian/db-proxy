@@ -36,7 +36,7 @@ public:
     size_t parseClientData(const char* data, size_t len);
     
     // 处理后端响应
-    size_t parseServerData(const char* data, size_t len);
+    size_t parseServerData(size_t len);
     
     State state() const { return state_; }
     void setState(State s) { state_ = s; }

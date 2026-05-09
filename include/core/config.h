@@ -49,7 +49,7 @@ struct Config {
     std::string log_file = "./logs/proxy.log";
 };
 
-Config loadConfig(const std::string& config_file);
+Config loadConfig();
 
 }  // namespace dbproxy
 

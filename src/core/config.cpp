@@ -4,7 +4,7 @@
 
 namespace dbproxy {
 
-Config loadConfig(const std::string& config_file) {
+Config loadConfig() {
     Config config;
     
     // 简化实现：使用默认值

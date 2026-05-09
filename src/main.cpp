@@ -36,7 +36,7 @@ void signalHandler(int sig) {
     }
 }
 
-int main(int argc, char* argv[]) {
+int main() {
     // 初始化日志（使用项目本地目录，避免 /var/log 权限问题）
     Logger::instance().init("./logs/proxy.log", LogLevel::INFO);
     LOG_INFO("=== Database Proxy Starting ===");
@@ -75,29 +75,37 @@ int main(int argc, char* argv[]) {
     
     // 设置消息回调
     g_server->setMessageCallback([](auto conn, const char* data, size_t len) {
-        // 简化：直接转发到后端
         METRICS_INC("queries_total");
-        
+
+        LOG_DEBUG("Received " + std::to_string(len) + " bytes from " +
+                  conn->remoteIp() + ":" + std::to_string(conn->remotePort()));
+
         auto start = std::chrono::steady_clock::now();
-        
+
+        // 解析 SQL 类型（用于路由和统计）
+        if (len > 5) {
+            std::string sql(data, len);
+            auto info = MySQLParser::parseSQL(sql);
+            LOG_DEBUG("SQL type: " + std::to_string(static_cast<int>(info.type)));
+        }
+
         // 获取连接池
-        auto pool = PoolManager::instance().getConnection("default", 
+        auto pool = PoolManager::instance().getConnection("default",
             std::chrono::milliseconds(5000));
-        
+
         if (!pool) {
             LOG_ERROR("Failed to get connection from pool");
             return;
         }
-        
-        // 执行查询（这里简化处理）
-        // 实际应该解析 SQL 并正确处理
-        
+
+        // TODO: 将 data（长度 len）通过后端连接转发到数据库
+
         // 归还连接
         PoolManager::instance().returnConnection("default", pool);
-        
+
         auto end = std::chrono::steady_clock::now();
         auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        
+
         METRICS_LATENCY("query_latency", latency);
         METRICS_GAUGE_SET("avg_latency_ms", latency.count());
     });

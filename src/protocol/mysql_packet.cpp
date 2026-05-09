@@ -23,8 +23,7 @@ bool MySQLPacket::parse(const char* data, size_t len) {
     
     // 跳过包头
     const char* payload = data + HEADER_SIZE;
-    size_t payload_len = payload_len_;
-    
+
     // 解析包类型
     if (payload_len_ == 0) {
         // 空包

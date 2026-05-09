@@ -68,9 +68,9 @@ void PoolManager::returnConnection(const std::string& pool_name, ConnectionPtr c
     }
 }
 
-std::shared_ptr<ConnectionPool> PoolManager::routePool(const std::string& sql_type) {
+std::shared_ptr<ConnectionPool> PoolManager::routePool() {
     // 简单路由：默认返回第一个池
-    // 实际应该根据 SQL 类型、数据库等选择池
+    // 后续可扩展为根据 SQL 类型、数据库等选择池
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
     if (!pools_.empty()) {

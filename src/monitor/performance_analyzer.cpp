@@ -107,8 +107,10 @@ void PerformanceAnalyzer::setAlertCallback(AlertCallback cb) {
 }
 
 std::vector<PerformanceAnalyzer::Alert> PerformanceAnalyzer::getRecentAlerts(size_t limit) {
-    // 简化实现
-    return {};
+    std::vector<Alert> alerts;
+    // TODO: 从告警历史中取最近 limit 条，当前告警存储尚未实现
+    alerts.reserve(limit);
+    return alerts;
 }
 
 void PerformanceAnalyzer::collectSnapshot() {

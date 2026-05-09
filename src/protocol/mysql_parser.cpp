@@ -67,7 +67,7 @@ size_t MySQLParser::parseClientData(const char* data, size_t len) {
     return 0;  // 数据不完整
 }
 
-size_t MySQLParser::parseServerData(const char* data, size_t len) {
+size_t MySQLParser::parseServerData(size_t len) {
     // 简化实现：直接转发
     return len;
 }
