@@ -49,7 +49,9 @@ struct Config {
     std::string log_file = "./logs/proxy.log";
 };
 
-Config loadConfig();
+// Load config from INI file; falls back to built-in defaults if file is
+// absent or unreadable.
+Config loadConfig(const std::string& config_file = "proxy.conf");
 
 }  // namespace dbproxy
 

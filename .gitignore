@@ -26,3 +26,5 @@ Makefile
 # 日志
 *.log
 logs/
+
+.workbuddy
