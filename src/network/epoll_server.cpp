@@ -10,6 +10,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <cstring>
+#include <algorithm>
+
+#if defined(__linux__)
+#include <sys/epoll.h>
+#else
+#include <sys/select.h>
+#endif
 
 namespace dbproxy {
 
@@ -65,7 +72,8 @@ bool EpollServer::listen(const std::string& host, uint16_t port) {
 
 void EpollServer::start() {
     running_ = true;
-    
+
+#if defined(__linux__)
     // 创建 epoll 实例
     epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd_ < 0) {
@@ -118,6 +126,72 @@ void EpollServer::start() {
             }
         }
     }
+#else
+    LOG_INFO("Select fallback server started");
+
+    while (running_) {
+        fd_set read_fds;
+        fd_set write_fds;
+        FD_ZERO(&read_fds);
+        FD_ZERO(&write_fds);
+
+        int max_fd = listen_fd_;
+        if (listen_fd_ >= 0) {
+            FD_SET(listen_fd_, &read_fds);
+        }
+
+        for (const auto& [fd, conn] : connections_) {
+            if (fd < 0 || fd >= FD_SETSIZE) {
+                continue;
+            }
+            FD_SET(fd, &read_fds);
+            if (conn->isWriting()) {
+                FD_SET(fd, &write_fds);
+            }
+            max_fd = std::max(max_fd, fd);
+        }
+
+        struct timeval timeout;
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+
+        int n = select(max_fd + 1, &read_fds, &write_fds, nullptr, &timeout);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            LOG_ERROR("Select failed: " + std::string(strerror(errno)));
+            break;
+        }
+        if (n == 0) {
+            continue;
+        }
+
+        if (listen_fd_ >= 0 && FD_ISSET(listen_fd_, &read_fds)) {
+            handleNewConnection();
+        }
+
+        std::vector<int> ready_fds;
+        ready_fds.reserve(connections_.size());
+        for (const auto& [fd, _] : connections_) {
+            ready_fds.push_back(fd);
+        }
+
+        for (int fd : ready_fds) {
+            auto it = connections_.find(fd);
+            if (it == connections_.end()) {
+                continue;
+            }
+            if (FD_ISSET(fd, &read_fds)) {
+                it->second->handleRead();
+            }
+            it = connections_.find(fd);
+            if (it != connections_.end() && FD_ISSET(fd, &write_fds)) {
+                it->second->handleWrite();
+            }
+        }
+    }
+#endif
 }
 
 void EpollServer::handleNewConnection() {
@@ -158,11 +232,13 @@ void EpollServer::handleNewConnection() {
             if (on_close_) on_close_(c);
         });
         
+#if defined(__linux__)
         // 注册到 epoll
         struct epoll_event ev;
         ev.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
         ev.data.fd = client_fd;
         epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &ev);
+#endif
         
         connections_[client_fd] = conn;
         

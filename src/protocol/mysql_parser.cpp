@@ -51,10 +51,6 @@ size_t MySQLParser::parseClientData(const char* data, size_t len) {
                 
                 // 记录慢查询
                 // 简化：假设每个查询 0ms 延迟
-                if (slow_query_threshold_ms_ > 0 && 0 > slow_query_threshold_ms_) {
-                    slow_query_count_++;
-                }
-                
                 LOG_DEBUG("SQL: " + sql.substr(0, 100));
             } else if (cmd == 0x01) {  // COM_QUIT
                 state_ = State::CLOSE;

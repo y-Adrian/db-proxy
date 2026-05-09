@@ -9,6 +9,8 @@
 #include <chrono>
 #include <string>
 #include <functional>
+#include <limits>
+#include <shared_mutex>
 
 namespace dbproxy {
 

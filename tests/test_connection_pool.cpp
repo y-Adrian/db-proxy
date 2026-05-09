@@ -60,7 +60,7 @@ int main() {
     std::cout << "Duration: " << duration.count() << " ms" << std::endl;
     std::cout << "Success: " << success_count.load() << std::endl;
     std::cout << "Failed: " << fail_count.load() << std::endl;
-    std::cout << "Total: " << (success_count + fail_count).load() << std::endl;
+    std::cout << "Total: " << (success_count.load() + fail_count.load()) << std::endl;
     std::cout << "QPS: " << (success_count.load() * 1000.0 / duration.count()) << std::endl;
     std::cout << "Pool stats: total=" << pool.totalConnections() 
               << " idle=" << pool.idleConnections()

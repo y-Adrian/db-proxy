@@ -30,7 +30,7 @@ struct CLIArgs {
     std::optional<std::string> execute;       // -c
     std::optional<std::string> file;          // -f
     bool interactive = false;
-    OutputFormat format = OutputFormat::Table;
+    dbcli::OutputFormat format = dbcli::OutputFormat::Table;
     std::string config_file;
     
     // 连接池参数
@@ -101,9 +101,9 @@ bool parseArgs(int argc, char* argv[], CLIArgs& args) {
         } else if (arg == "--config") {
             if (i + 1 < argc) args.config_file = argv[++i];
         } else if (arg == "--json") {
-            args.format = OutputFormat::JSON;
+            args.format = dbcli::OutputFormat::JSON;
         } else if (arg == "--csv") {
-            args.format = OutputFormat::CSV;
+            args.format = dbcli::OutputFormat::CSV;
         } else if (arg == "-i" || arg == "--interactive") {
             args.interactive = true;
         } else if (arg.rfind("--", 0) == 0) {
@@ -147,7 +147,7 @@ std::optional<dbcli::ConnectionConfig> buildConnectionConfig(const CLIArgs& args
     
     // 根据端口推断类型
     dbcli::DBType type = dbcli::DBType::MySQL;
-    if (info.port == 5432 || !args.user.empty() && args.user == "postgres") {
+    if (info.port == 5432 || (!args.user.empty() && args.user == "postgres")) {
         type = dbcli::DBType::PostgreSQL;
         if (info.port == 0) info.port = 5432;
     }

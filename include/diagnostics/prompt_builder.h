@@ -61,13 +61,13 @@ struct DiagnosticContext {
     // 全局统计
     uint64_t total_queries{0};
     uint64_t failed_queries{0};
-    uint64_t slow_queries{0};
+    uint64_t slow_query_count{0};
     double current_qps{0.0};
     double avg_latency_ms{0.0};
     double p99_latency_ms{0.0};
 
     // 慢查询 Top N
-    std::vector<SlowQueryRecord> slow_queries;
+    std::vector<SlowQueryRecord> slow_query_records;
 
     // 错误分布
     std::vector<ErrorDistributionRecord> error_distribution;
@@ -76,8 +76,8 @@ struct DiagnosticContext {
     PoolStatusSnapshot pool_status;
 
     // 查询模式
-    uint64_t read_qps{0};
-    uint64_t write_qps{0};
+    double read_qps{0.0};
+    double write_qps{0.0};
     std::string busiest_table;
     std::string busiest_database;
 };

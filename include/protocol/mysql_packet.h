@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <array>
+#include <variant>
 
 namespace dbproxy {
 

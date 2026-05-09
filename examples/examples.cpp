@@ -127,7 +127,7 @@ void example_pool_adjustment() {
               << ", 忙碌=" << pool.busyConnections() << std::endl;
     
     // 模拟高负载
-    std::vector<std::shared_ptr<Connection>> held_conns;
+    std::vector<ConnectionPtr> held_conns;
     for (int i = 0; i < 20; ++i) {
         auto conn = pool.getConnection(std::chrono::seconds(1));
         if (conn) {

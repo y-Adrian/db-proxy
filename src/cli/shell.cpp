@@ -32,23 +32,16 @@ bool Shell::connect(const ConnectionConfig& config) {
              info.host, info.port, info.database, info.username);
     
     try {
-        // 创建连接池
-        if (type == DBType::MySQL) {
-            pool_ = std::make_shared<dbproxy::ConnectionPool>(
-                info.host, info.port, info.username, info.password, info.database,
-                info.min_connections, info.max_connections,
-                std::chrono::milliseconds(info.idle_timeout_ms),
-                std::chrono::milliseconds(info.connection_timeout_ms)
-            );
-        } else {
-            // PostgreSQL 连接池
-            pool_ = std::make_shared<dbproxy::ConnectionPool>(
-                info.host, info.port, info.username, info.password, info.database,
-                info.min_connections, info.max_connections,
-                std::chrono::milliseconds(info.idle_timeout_ms),
-                std::chrono::milliseconds(info.connection_timeout_ms)
-            );
-        }
+        auto protocol = type == DBType::MySQL
+            ? dbproxy::BackendProtocol::MySQL
+            : dbproxy::BackendProtocol::PostgreSQL;
+        pool_ = std::make_shared<dbproxy::ConnectionPool>(
+            info.host, info.port, info.username, info.password, info.database,
+            info.min_connections, info.max_connections,
+            std::chrono::milliseconds(info.idle_timeout_ms),
+            std::chrono::milliseconds(info.connection_timeout_ms),
+            protocol
+        );
         
         // 预热连接池
         if (!pool_->warmup()) {

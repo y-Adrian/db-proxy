@@ -18,14 +18,23 @@ DiagnosticContext PromptBuilder::collectContext() {
 
     ctx.total_queries = global.total_queries;
     ctx.failed_queries = global.failed_queries;
-    ctx.slow_queries = global.slow_queries;
+    ctx.slow_query_count = global.slow_queries;
     ctx.current_qps = global.current_qps;
     ctx.read_qps = global.current_rps;
     ctx.write_qps = global.current_wps;
-    ctx.active_connections = global.active_connections;
 
     // 获取慢查询 Top 10
-    ctx.slow_queries = stats.getSlowQueries(10);
+    for (const auto& item : stats.getSlowQueries(10)) {
+        ctx.slow_query_records.push_back({
+            .sql_fingerprint = item.sql,
+            .sql_type = item.type,
+            .database = item.database,
+            .exec_count = item.count,
+            .avg_latency_ms = static_cast<uint64_t>(item.avg_latency_ms),
+            .max_latency_ms = item.max_latency_ms,
+            .total_latency_ms = item.total_latency_ms
+        });
+    }
 
     // 获取 Top QPS 查询（用于分析查询模式）
     auto top_queries = stats.getTopQueries(5);
@@ -62,7 +71,7 @@ std::string PromptBuilder::buildPrompt(const DiagnosticContext& ctx,
 
         oss << formatGlobalStats(ctx, language);
         oss << "\n\n";
-        oss << formatSlowQueries(ctx.slow_queries, language);
+        oss << formatSlowQueries(ctx.slow_query_records, language);
         oss << "\n\n";
         oss << formatErrorDistribution(ctx.error_distribution, language);
         oss << "\n\n";
@@ -84,7 +93,7 @@ std::string PromptBuilder::buildPrompt(const DiagnosticContext& ctx,
         // Same structure, English
         oss << formatGlobalStats(ctx, language);
         oss << "\n\n";
-        oss << formatSlowQueries(ctx.slow_queries, "en");
+        oss << formatSlowQueries(ctx.slow_query_records, "en");
         oss << "\n\n";
         oss << formatErrorDistribution(ctx.error_distribution, "en");
         oss << "\n\n";
@@ -110,14 +119,14 @@ std::string PromptBuilder::buildBriefPrompt(const DiagnosticContext& ctx,
     if (language == "zh") {
         oss << "数据库代理状态：";
         oss << "QPS=" << std::fixed << std::setprecision(1) << ctx.current_qps << "，";
-        oss << "慢查询=" << ctx.slow_queries << "，";
+        oss << "慢查询=" << ctx.slow_query_count << "，";
         oss << "连接池使用率=" << std::fixed << std::setprecision(1)
             << ctx.pool_status.pool_usage_percent << "%";
         oss << "。请快速分析是否存在异常。";
     } else {
         oss << "DB Proxy status: ";
         oss << "QPS=" << ctx.current_qps << ", ";
-        oss << "slow_queries=" << ctx.slow_queries << ", ";
+        oss << "slow_queries=" << ctx.slow_query_count << ", ";
         oss << "pool_usage=" << ctx.pool_status.pool_usage_percent << "%";
         oss << ". Quick analysis: any anomaly?";
     }
@@ -204,14 +213,14 @@ std::string PromptBuilder::formatPoolStatus(
         oss << "- 空闲连接: " << pool.idle_connections << "\n";
         oss << "- 最大连接: " << pool.max_connections << "\n";
         oss << "- 使用率: " << std::fixed << std::setprecision(1)
-            << pool.pool_usage_percentage << "%\n";
+            << pool.pool_usage_percent << "%\n";
         oss << "- 等待线程: " << pool.waiting_threads << "\n";
     } else {
         oss << "## Connection Pool Status\n\n";
         oss << "- Active: " << pool.active_connections << "\n";
         oss << "- Idle: " << pool.idle_connections << "\n";
         oss << "- Max: " << pool.max_connections << "\n";
-        oss << "- Usage: " << pool.pool_usage_percentage << "%\n";
+        oss << "- Usage: " << pool.pool_usage_percent << "%\n";
         oss << "- Waiting: " << pool.waiting_threads << "\n";
     }
 
@@ -227,7 +236,7 @@ std::string PromptBuilder::formatGlobalStats(
         oss << "## 全局统计\n\n";
         oss << "- 总查询数: " << ctx.total_queries << "\n";
         oss << "- 失败查询: " << ctx.failed_queries << "\n";
-        oss << "- 慢查询数: " << ctx.slow_queries << "\n";
+        oss << "- 慢查询数: " << ctx.slow_query_count << "\n";
         oss << "- 当前 QPS: " << std::fixed << std::setprecision(1) << ctx.current_qps << "\n";
         oss << "- 读 QPS: " << ctx.read_qps << "\n";
         oss << "- 写 QPS: " << ctx.write_qps << "\n";
@@ -235,7 +244,7 @@ std::string PromptBuilder::formatGlobalStats(
         oss << "## Global Statistics\n\n";
         oss << "- Total Queries: " << ctx.total_queries << "\n";
         oss << "- Failed Queries: " << ctx.failed_queries << "\n";
-        oss << "- Slow Queries: " << ctx.slow_queries << "\n";
+        oss << "- Slow Queries: " << ctx.slow_query_count << "\n";
         oss << "- Current QPS: " << ctx.current_qps << "\n";
     }
 

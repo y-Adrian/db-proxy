@@ -172,7 +172,7 @@ std::string ReportGenerator::saveToFile(const DiagnosticReport& report,
 }
 
 std::string ReportGenerator::getReportDir() {
-    return "/Users/debris/WorkBuddy/2026-05-08-task-3/db-proxy/diagnostics/reports";
+    return (std::filesystem::current_path() / "diagnostics" / "reports").string();
 }
 
 std::string ReportGenerator::getSeverityColor(const std::string& severity) const {

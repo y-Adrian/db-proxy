@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+
 # 编译器优化选项
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall -Wextra")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -fsanitize=address")
@@ -33,6 +36,7 @@ set(PROTOCOL_SOURCES
 
 set(POOL_SOURCES
     src/pool/connection.cpp
+    src/pool/postgresql_connection.cpp
     src/pool/connection_pool.cpp
     src/pool/pool_manager.cpp
 )
@@ -76,6 +80,7 @@ add_executable(bench_pool benchmarks/bench_connection_pool.cpp ${POOL_SOURCES} $
 
 # 场景化用例
 add_executable(examples examples/examples.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
+add_executable(examples_pg examples/examples_pg.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
 
 # CLI 工具
 add_executable(dbcli ${CLI_SOURCES} ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
@@ -93,7 +98,11 @@ add_executable(diagnostics_demo
 )
 
 # 链接库
-target_link_libraries(db-proxy pthread ssl crypto)
-target_link_libraries(dbcli pthread ssl crypto)
-target_link_libraries(examples pthread)
-target_link_libraries(stress_test pthread)
+target_link_libraries(db-proxy PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(dbcli PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(examples PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(examples_pg PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(stress_test PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(test_pool PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(bench_pool PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(diagnostics_demo PRIVATE Threads::Threads OpenSSL::Crypto)

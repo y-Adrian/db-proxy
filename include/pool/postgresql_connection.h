@@ -1,105 +1,89 @@
-#ifndef DB_PROXY_CONNECTION_H
-#define DB_PROXY_CONNECTION_H
+#ifndef DB_PROXY_POSTGRESQL_CONNECTION_H
+#define DB_PROXY_POSTGRESQL_CONNECTION_H
 
 #include "pool/backend_connection.h"
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <chrono>
-#include <memory>
 #include <atomic>
 
 namespace dbproxy {
 
-/**
- * @brief MySQL 数据库连接封装
- * 
- * 面试亮点：
- * - 连接生命周期管理：创建、校验、心跳、归还
- * - 智能指针 + 引用计数：防止连接泄漏
- * - 非阻塞 IO：使用 poll/select 检测连接状态
- */
-class Connection : public BackendConnection, public std::enable_shared_from_this<Connection> {
+class PostgreSQLConnection : public BackendConnection,
+                             public std::enable_shared_from_this<PostgreSQLConnection> {
 public:
     using State = BackendConnection::State;
     using Column = BackendConnection::Column;
-    
-    Connection(const std::string& host, uint16_t port,
-               const std::string& user, const std::string& password,
-               const std::string& database);
-    ~Connection();
-    
-    // 连接管理
+
+    PostgreSQLConnection(const std::string& host, uint16_t port,
+                         const std::string& user, const std::string& password,
+                         const std::string& database);
+    ~PostgreSQLConnection() override;
+
     bool connect() override;
     void close() override;
     bool isConnected() const override;
-    
-    // 健康检查
     bool ping() override;
     bool execute(const std::string& sql) override;
     bool sendRaw(const char* data, size_t len) override;
     ssize_t recvRaw(char* buffer, size_t len, std::chrono::milliseconds timeout) override;
-    
-    // 查询结果访问 (CLI 使用)
+
     const std::vector<Column>& resultColumns() const override { return result_columns_; }
     const std::vector<std::vector<std::string>>& resultRows() const override { return result_rows_; }
     int affectedRows() const override { return affected_rows_; }
     const std::string& lastError() const override { return last_error_; }
     void clearResult() override;
-    
-    // 状态
+
     State state() const override { return state_.load(); }
     void setState(State s) override { state_.store(s); }
-    
-    // 属性
+
     int fd() const override { return fd_; }
     uint64_t id() const override { return id_; }
     const std::string& remoteHost() const override { return remote_host_; }
     uint16_t remotePort() const override { return remote_port_; }
-    BackendProtocol protocol() const override { return BackendProtocol::MySQL; }
-    
-    // 时间戳
+    BackendProtocol protocol() const override { return BackendProtocol::PostgreSQL; }
+
     std::chrono::steady_clock::time_point lastActiveTime() const override { return last_active_; }
     void updateActiveTime() override { last_active_ = std::chrono::steady_clock::now(); }
-    
-    // 引用计数（用于连接池追踪）
+
     int refCount() const override { return ref_count_.load(); }
     void addRef() override { ref_count_.fetch_add(1); }
     void releaseRef() override { ref_count_.fetch_sub(1); }
 
 private:
-    bool doHandshake();
-    bool recvResult();
-    std::string makeAuthResponse(const std::string& scramble,
-                                 const std::string& password);
-    std::string makeCachingSha2Response(const std::string& scramble,
-                                        const std::string& password);
-    bool readPacket(std::string& payload, uint8_t* sequence_id = nullptr,
-                    std::chrono::milliseconds timeout = std::chrono::seconds(5));
-    bool writePacket(const std::string& payload, uint8_t sequence_id);
+    bool doStartup();
+    bool handleAuthentication(int32_t auth_type, const std::string& payload);
+    bool handleCleartextPassword();
+    bool handleMD5Password(const char* salt);
+    bool handleSASL(const std::string& payload);
+    bool readMessage(char& type, std::string& payload,
+                     std::chrono::milliseconds timeout = std::chrono::seconds(5));
+    bool writeMessage(char type, const std::string& payload);
+    bool waitReadyForQuery();
+    bool parseQueryMessage(char type, const std::string& payload);
+    bool readExact(char* buffer, size_t len, std::chrono::milliseconds timeout);
+    bool writeAll(const char* data, size_t len);
+    bool waitReadable(std::chrono::milliseconds timeout) const;
+    bool waitWritable(std::chrono::milliseconds timeout) const;
 
     int fd_{-1};
     uint64_t id_;
-    
+
     std::string remote_host_;
     uint16_t remote_port_;
     std::string username_;
     std::string password_;
     std::string database_;
-    
+
     std::atomic<State> state_{State::IDLE};
     std::atomic<int> ref_count_{0};
     std::chrono::steady_clock::time_point last_active_;
-    
-    // 查询结果
+
     std::vector<Column> result_columns_;
     std::vector<std::vector<std::string>> result_rows_;
     int affected_rows_{0};
     std::string last_error_;
-    
+
     static uint64_t next_id_;
 };
 
 }  // namespace dbproxy
 
-#endif  // DB_PROXY_CONNECTION_H
+#endif  // DB_PROXY_POSTGRESQL_CONNECTION_H

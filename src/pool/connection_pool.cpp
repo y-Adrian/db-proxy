@@ -1,4 +1,5 @@
 #include "pool/connection_pool.h"
+#include "pool/postgresql_connection.h"
 #include "core/logger.h"
 #include <chrono>
 
@@ -10,9 +11,10 @@ ConnectionPool::ConnectionPool(const std::string& host, uint16_t port,
                                size_t min_connections,
                                size_t max_connections,
                                std::chrono::milliseconds max_idle_time,
-                               std::chrono::milliseconds connection_timeout)
+                               std::chrono::milliseconds connection_timeout,
+                               BackendProtocol protocol)
     : host_(host), port_(port), username_(user), password_(password), database_(database),
-      min_connections_(min_connections), max_connections_(max_connections),
+      protocol_(protocol), min_connections_(min_connections), max_connections_(max_connections),
       max_idle_time_(max_idle_time), connection_timeout_(connection_timeout) {
     
     LOG_INFO("Creating connection pool: " + host_ + ":" + std::to_string(port_) + 
@@ -33,7 +35,12 @@ ConnectionPool::~ConnectionPool() {
 }
 
 ConnectionPtr ConnectionPool::createConnection() {
-    auto conn = std::make_shared<Connection>(host_, port_, username_, password_, database_);
+    ConnectionPtr conn;
+    if (protocol_ == BackendProtocol::PostgreSQL) {
+        conn = std::make_shared<PostgreSQLConnection>(host_, port_, username_, password_, database_);
+    } else {
+        conn = std::make_shared<Connection>(host_, port_, username_, password_, database_);
+    }
     
     if (conn->connect()) {
         total_connections_.fetch_add(1);
@@ -238,6 +245,10 @@ bool ConnectionPool::warmup() {
 void ConnectionPool::shutdownAll() {
     closed_ = true;
     cv_.notify_all();
+}
+
+void ConnectionPool::close() {
+    shutdownAll();
 }
 
 }  // namespace dbproxy

@@ -10,6 +10,7 @@
  */
 
 #include "network/epoll_server.h"
+#include "network/tcp_connection.h"
 #include "pool/pool_manager.h"
 #include "monitor/metrics.h"
 #include "monitor/statistics.h"

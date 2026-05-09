@@ -100,6 +100,7 @@ private:
     uint64_t total_connections_{0};
     uint64_t total_queries_{0};
     uint64_t failed_queries_{0};
+    uint64_t slow_queries_{0};
     std::chrono::steady_clock::time_point start_time_;
 };
 

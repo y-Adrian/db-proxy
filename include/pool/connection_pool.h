@@ -2,6 +2,7 @@
 #define DB_PROXY_CONNECTION_POOL_H
 
 #include "pool/connection.h"
+#include "pool/backend_connection.h"
 #include <memory>
 #include <vector>
 #include <queue>
@@ -30,7 +31,8 @@ public:
                   size_t min_connections,
                   size_t max_connections,
                   std::chrono::milliseconds max_idle_time,
-                  std::chrono::milliseconds connection_timeout);
+                  std::chrono::milliseconds connection_timeout,
+                  BackendProtocol protocol = BackendProtocol::MySQL);
     
     ~ConnectionPool();
     
@@ -52,6 +54,10 @@ public:
     
     // 清理空闲连接
     void cleanIdleConnections();
+
+    // 关闭连接池，唤醒等待线程
+    void shutdownAll();
+    void close();
     
     // 预热：创建最小连接数
     bool warmup();
@@ -75,6 +81,7 @@ private:
     std::string username_;
     std::string password_;
     std::string database_;
+    BackendProtocol protocol_;
     
     size_t min_connections_;
     size_t max_connections_;

@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include <shared_mutex>
+#include <vector>
 
 namespace dbproxy {
 
@@ -27,7 +28,8 @@ public:
                  const std::string& user, const std::string& password,
                  const std::string& database,
                  size_t min_connections = 5,
-                 size_t max_connections = 50);
+                 size_t max_connections = 50,
+                 BackendProtocol protocol = BackendProtocol::MySQL);
     
     // 获取连接池
     std::shared_ptr<ConnectionPool> getPool(const std::string& name);

@@ -8,6 +8,7 @@
 #include <vector>
 #include <mutex>
 #include <chrono>
+#include <optional>
 
 namespace dbproxy {
 namespace diagnostics {

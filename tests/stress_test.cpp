@@ -153,7 +153,7 @@ void test_concurrent_gets() {
     const int per_thread = 200;
     std::atomic<int> success_count{0};
     std::atomic<int> fail_count{0};
-    std::atomic<int> total_latency_us{0};
+    std::atomic<int64_t> total_latency_us{0};
     
     std::vector<std::thread> threads;
     auto start = std::chrono::high_resolution_clock::now();
@@ -167,7 +167,7 @@ void test_concurrent_gets() {
                 
                 if (conn) {
                     auto latency = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-                    total_latency.fetch_add(latency);
+                    total_latency_us.fetch_add(latency);
                     pool.returnConnection(conn);
                     success_count++;
                 } else {
@@ -193,7 +193,7 @@ void test_concurrent_gets() {
     std::cout << "吞吐量: " << (total_requests * 1000.0 / duration.count()) << " gets/s\n";
     
     if (success_count.load() > 0) {
-        std::cout << "平均延迟: " << (total_latency.load() / 1000.0 / success_count.load()) << " ms\n";
+        std::cout << "平均延迟: " << (total_latency_us.load() / 1000.0 / success_count.load()) << " ms\n";
     }
     
     std::cout << "池状态: 总=" << pool.totalConnections()

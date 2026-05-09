@@ -1,16 +1,21 @@
 #include "network/event_loop.h"
 #include "core/logger.h"
-#include <sys/epoll.h>
-#include <sys/timerfd.h>
 #include <unistd.h>
 #include <cstring>
+#include <thread>
+
+#if defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
+#endif
 
 namespace dbproxy {
 
 EventLoop::EventLoop()
     : epoll_fd_(-1), quit_(false), thread_id_(0), next_timer_id_(1) {
     thread_id_ = getpid();  // 简化，实际应该是线程 ID
-    
+
+#if defined(__linux__)
     epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd_ < 0) {
         LOG_ERROR("Failed to create epoll");
@@ -24,6 +29,9 @@ EventLoop::EventLoop()
         ev.data.fd = timer_fd_;
         epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, timer_fd_, &ev);
     }
+#else
+    timer_fd_ = -1;
+#endif
 }
 
 EventLoop::~EventLoop() {
@@ -36,6 +44,7 @@ EventLoop::~EventLoop() {
 }
 
 void EventLoop::loop() {
+#if defined(__linux__)
     const int MAX_EVENTS = 1024;
     struct epoll_event events[MAX_EVENTS];
     
@@ -54,6 +63,12 @@ void EventLoop::loop() {
             }
         }
     }
+#else
+    while (!quit_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        handleExpiredTimers();
+    }
+#endif
 }
 
 void EventLoop::quit() {
@@ -64,6 +79,14 @@ bool EventLoop::isInLoopThread() const {
     return thread_id_ == getpid();  // 简化
 }
 
+void EventLoop::updateChannel(Channel* channel) {
+    (void)channel;
+}
+
+void EventLoop::removeChannel(Channel* channel) {
+    (void)channel;
+}
+
 EventLoop::TimerId EventLoop::runAt(TimerCallback cb, std::chrono::milliseconds timeout) {
     auto now = std::chrono::steady_clock::now();
     Timer timer;
@@ -71,8 +94,9 @@ EventLoop::TimerId EventLoop::runAt(TimerCallback cb, std::chrono::milliseconds 
     timer.expire = now + timeout;
     timer.callback = std::move(cb);
     timer.repeat = false;
-    timers_[timer.id] = std::move(timer);
-    return timers_.begin()->first;
+    TimerId id = timer.id;
+    timers_[id] = std::move(timer);
+    return id;
 }
 
 EventLoop::TimerId EventLoop::runAfter(TimerCallback cb, std::chrono::milliseconds delay) {
@@ -87,8 +111,9 @@ EventLoop::TimerId EventLoop::runEvery(TimerCallback cb, std::chrono::millisecon
     timer.callback = std::move(cb);
     timer.repeat = true;
     timer.interval = interval;
-    timers_[timer.id] = std::move(timer);
-    return timers_.begin()->first;
+    TimerId id = timer.id;
+    timers_[id] = std::move(timer);
+    return id;
 }
 
 void EventLoop::cancelTimer(TimerId id) {

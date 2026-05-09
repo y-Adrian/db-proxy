@@ -6,6 +6,16 @@
 
 namespace dbproxy {
 
+namespace {
+
+void addAtomicDouble(std::atomic<double>& target, double delta) {
+    double current = target.load();
+    while (!target.compare_exchange_weak(current, current + delta)) {
+    }
+}
+
+}  // namespace
+
 Metrics& Metrics::instance() {
     static Metrics instance_;
     return instance_;
@@ -63,7 +73,7 @@ void Metrics::incrementGauge(const std::string& name) {
         it = gauges_.find(name);
     }
     
-    it->second->value.fetch_add(1.0);
+    addAtomicDouble(it->second->value, 1.0);
 }
 
 void Metrics::decrementGauge(const std::string& name) {
@@ -77,7 +87,7 @@ void Metrics::decrementGauge(const std::string& name) {
         it = gauges_.find(name);
     }
     
-    it->second->value.fetch_sub(1.0);
+    addAtomicDouble(it->second->value, -1.0);
 }
 
 double Metrics::getGauge(const std::string& name) const {
@@ -105,7 +115,7 @@ void Metrics::recordLatency(const std::string& name, std::chrono::milliseconds m
 
 void Metrics::Histogram::record(double value) {
     count.fetch_add(1);
-    sum.fetch_add(value);
+    addAtomicDouble(sum, value);
     
     // 更新 min/max
     double current_min = min.load();

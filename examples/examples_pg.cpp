@@ -57,7 +57,8 @@ void example_pg_basic_usage() {
                         5,   // 最小连接数
                         20,  // 最大连接数
                         std::chrono::seconds(30),  // 最大空闲时间
-                        std::chrono::seconds(5));   // 获取连接超时
+                        std::chrono::seconds(5),   // 获取连接超时
+                        BackendProtocol::PostgreSQL);
     
     // 预热连接池
     if (pool.warmup()) {
@@ -93,7 +94,8 @@ void example_pg_protocol_features() {
     std::cout << "\n=== 场景 2: PostgreSQL 协议特性 ===" << std::endl;
     
     ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test", 
-                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5));
+                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5),
+                        BackendProtocol::PostgreSQL);
     
     auto conn = pool.getConnection(std::chrono::seconds(5));
     if (!conn) {
@@ -141,7 +143,8 @@ void example_pg_transaction() {
     std::cout << "\n=== 场景 3: PostgreSQL 事务处理 ===" << std::endl;
     
     ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5));
+                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5),
+                        BackendProtocol::PostgreSQL);
     
     auto conn = pool.getConnection(std::chrono::seconds(5));
     if (!conn) {
@@ -223,7 +226,8 @@ void example_pg_listen_notify() {
     std::cout << "\n=== 场景 5: PostgreSQL LISTEN/NOTIFY ===" << std::endl;
     
     ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        2, 10, std::chrono::seconds(30), std::chrono::seconds(5));
+                        2, 10, std::chrono::seconds(30), std::chrono::seconds(5),
+                        BackendProtocol::PostgreSQL);
     
     // 注意: LISTEN/NOTIFY 是异步机制，需要长连接
     // 这里演示概念，实际使用需要单独的连接处理通知
@@ -258,7 +262,8 @@ void example_pg_copy() {
     std::cout << "\n=== 场景 6: PostgreSQL COPY 协议 ===" << std::endl;
     
     ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        3, 10, std::chrono::seconds(30), std::chrono::seconds(5));
+                        3, 10, std::chrono::seconds(30), std::chrono::seconds(5),
+                        BackendProtocol::PostgreSQL);
     
     std::cout << "PostgreSQL COPY 协议特性:" << std::endl;
     std::cout << "  - 高速批量数据导入/导出" << std::endl;
@@ -292,7 +297,8 @@ void example_pg_health_check() {
     std::cout << "\n=== 场景 7: PostgreSQL 健康检查 ===" << std::endl;
     
     ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        5, 10, std::chrono::seconds(30), std::chrono::seconds(5));
+                        5, 10, std::chrono::seconds(30), std::chrono::seconds(5),
+                        BackendProtocol::PostgreSQL);
     pool.warmup();
     
     std::cout << "健康检查前: 总=" << pool.totalConnections()
@@ -347,9 +353,12 @@ void example_pg_multi_database() {
     auto& manager = PoolManager::instance();
     
     // 添加多个 PostgreSQL 数据库连接池
-    manager.addPool("pg_main", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 20);
-    manager.addPool("pg_analytics", "127.0.0.1", PG_PORT, "postgres", "postgres", "analytics", 3, 10);
-    manager.addPool("pg_readonly", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 30);
+    manager.addPool("pg_main", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 20,
+                    BackendProtocol::PostgreSQL);
+    manager.addPool("pg_analytics", "127.0.0.1", PG_PORT, "postgres", "postgres", "analytics", 3, 10,
+                    BackendProtocol::PostgreSQL);
+    manager.addPool("pg_readonly", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 30,
+                    BackendProtocol::PostgreSQL);
     
     std::cout << "已添加 3 个 PostgreSQL 连接池" << std::endl;
     
