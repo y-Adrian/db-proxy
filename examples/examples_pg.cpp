@@ -1,9 +1,15 @@
 /**
  * @file examples_pg.cpp
- * @brief DB-Proxy PostgreSQL 版本场景化用例集
- * 
- * 本文件展示了 db-proxy 支持 PostgreSQL 协议的使用场景和示例代码
- * 适用于学习、测试和面试演示
+ * @brief DB-Proxy PostgreSQL 真实后端场景化用例集
+ *
+ * 本文件通过 db-proxy 的 PostgreSQL 协议实现真正连接 PG 后端，
+ * 执行查询并展示结果数据。
+ *
+ * 前置条件：
+ *   - PostgreSQL 服务运行在 127.0.0.1:5432
+ *   - 存在可连接的用户和数据库
+ *
+ * 如 PG 不可用，示例会优雅跳过，不会崩溃。
  */
 
 #include "pool/connection_pool.h"
@@ -16,391 +22,358 @@
 #include <chrono>
 #include <atomic>
 #include <vector>
-#include <random>
+#include <cstdlib>
 
 using namespace dbproxy;
 
 // ============================================================================
-// PostgreSQL 配置常量
+// PostgreSQL 连接配置（根据本地环境自动检测）
 // ============================================================================
 
-// PostgreSQL 默认端口
-constexpr int PG_PORT = 5432;
-
-// PostgreSQL 连接参数结构
 struct PGConfig {
-    std::string host;
-    int port;
+    std::string host = "127.0.0.1";
+    int port = 5432;
     std::string user;
     std::string password;
-    std::string database;
+    std::string database = "test";
 };
+
+/** 从环境变量或默认值构建 PG 配置 */
+PGConfig detectPGConfig() {
+    PGConfig cfg;
+    // 优先使用环境变量，方便 Docker 场景
+    const char* env_host = std::getenv("PGHOST");
+    const char* env_port = std::getenv("PGPORT");
+    const char* env_user = std::getenv("PGUSER");
+    const char* env_pass = std::getenv("PGPASSWORD");
+    const char* env_db   = std::getenv("PGDATABASE");
+
+    if (env_host) cfg.host = env_host;
+    if (env_port) cfg.port = std::stoi(env_port);
+    if (env_user) cfg.user = env_user;
+    if (env_pass) cfg.password = env_pass;
+    if (env_db)   cfg.database = env_db;
+
+    // macOS Homebrew PostgreSQL 默认使用当前系统用户名，无密码
+    if (cfg.user.empty()) {
+        cfg.user = std::getenv("USER") ? std::getenv("USER") : "postgres";
+    }
+    return cfg;
+}
+
+/** 创建 PG 连接池，失败返回 nullptr */
+std::shared_ptr<ConnectionPool> createPGPool(const PGConfig& cfg,
+                                              size_t min_conn = 3,
+                                              size_t max_conn = 10) {
+    auto pool = std::make_shared<ConnectionPool>(
+        cfg.host, cfg.port, cfg.user, cfg.password, cfg.database,
+        min_conn, max_conn,
+        std::chrono::seconds(30),
+        std::chrono::seconds(5),
+        BackendProtocol::PostgreSQL);
+    return pool;
+}
+
+/** 打印查询结果的辅助函数 */
+void printResult(const ConnectionPtr& conn, const std::string& sql) {
+    if (!conn) return;
+    if (conn->execute(sql)) {
+        const auto& cols = conn->resultColumns();
+        const auto& rows = conn->resultRows();
+
+        // 打印列头
+        for (size_t i = 0; i < cols.size(); ++i) {
+            if (i > 0) std::cout << " | ";
+            std::cout << cols[i].name;
+        }
+        std::cout << "\n";
+
+        // 打印分隔线
+        for (size_t i = 0; i < cols.size(); ++i) {
+            if (i > 0) std::cout << "-+-";
+            std::cout << "--------";
+        }
+        std::cout << "\n";
+
+        // 打印行数据
+        for (const auto& row : rows) {
+            for (size_t i = 0; i < row.size(); ++i) {
+                if (i > 0) std::cout << " | ";
+                std::cout << row[i];
+            }
+            std::cout << "\n";
+        }
+
+        if (rows.empty()) {
+            std::cout << "(0 rows)\n";
+        }
+        if (conn->affectedRows() > 0) {
+            std::cout << "Affected rows: " << conn->affectedRows() << "\n";
+        }
+    } else {
+        std::cout << "  [ERROR] " << conn->lastError() << "\n";
+    }
+}
+
+/** 执行单条 SQL 不打印结果，仅报告成功/失败 */
+bool execSQL(const ConnectionPtr& conn, const std::string& sql) {
+    if (!conn) return false;
+    if (conn->execute(sql)) {
+        return true;
+    } else {
+        std::cout << "  [ERROR] " << sql.substr(0, 50) << " -> " << conn->lastError() << "\n";
+        return false;
+    }
+}
+
+// ============================================================================
+// 全局变量：PG 是否可用
+// ============================================================================
+
+static bool g_pg_available = false;
 
 // ============================================================================
 // 场景 1: PostgreSQL 基础连接池使用
 // ============================================================================
 
-void example_pg_basic_usage() {
-    std::cout << "\n=== 场景 1: PostgreSQL 基础连接池使用 ===" << std::endl;
-    
-    // PostgreSQL 连接配置
-    PGConfig config{
-        .host = "127.0.0.1",
-        .port = PG_PORT,
-        .user = "postgres",
-        .password = "postgres",
-        .database = "test"
-    };
-    
-    // 创建连接池 (PostgreSQL)
-    ConnectionPool pool(config.host, config.port, config.user, config.password, config.database,
-                        5,   // 最小连接数
-                        20,  // 最大连接数
-                        std::chrono::seconds(30),  // 最大空闲时间
-                        std::chrono::seconds(5),   // 获取连接超时
-                        BackendProtocol::PostgreSQL);
-    
-    // 预热连接池
-    if (pool.warmup()) {
-        std::cout << "PostgreSQL 连接池预热成功" << std::endl;
+void example_pg_basic_usage(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 1: PostgreSQL 基础连接池使用 ===\n";
+
+    auto pool = createPGPool(cfg, 2, 5);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过此场景\n";
+        return;
     }
-    
-    // 获取连接
-    auto conn = pool.getConnection(std::chrono::seconds(5));
-    if (conn) {
-        std::cout << "获取连接成功, ID: " << conn->id() << std::endl;
-        
-        // 使用连接执行查询 (PostgreSQL 语法)
-        if (conn->execute("SELECT 1")) {
-            std::cout << "查询执行成功" << std::endl;
-        }
-        
-        // 归还连接
-        pool.returnConnection(conn);
-        std::cout << "连接已归还" << std::endl;
+    std::cout << "  ✓ 连接池预热成功: 总=" << pool->totalConnections()
+              << ", 空闲=" << pool->idleConnections() << "\n";
+
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (!conn) {
+        std::cout << "  ✗ 获取连接失败\n";
+        return;
     }
-    
-    // 打印状态
-    std::cout << "池状态: 总连接=" << pool.totalConnections()
-              << ", 空闲=" << pool.idleConnections()
-              << ", 忙碌=" << pool.busyConnections() << std::endl;
+
+    std::cout << "\n  --- SELECT version() ---\n";
+    printResult(conn, "SELECT version()");
+
+    std::cout << "\n  --- SELECT current_database() ---\n";
+    printResult(conn, "SELECT current_database()");
+
+    std::cout << "\n  --- SELECT current_user ---\n";
+    printResult(conn, "SELECT current_user");
+
+    pool->returnConnection(conn);
+    std::cout << "\n  ✓ 连接已归还，池状态: 总=" << pool->totalConnections()
+              << ", 空闲=" << pool->idleConnections()
+              << ", 忙碌=" << pool->busyConnections() << "\n";
 }
 
 // ============================================================================
-// 场景 2: PostgreSQL 协议特性使用
+// 场景 2: PostgreSQL 协议特性
 // ============================================================================
 
-void example_pg_protocol_features() {
-    std::cout << "\n=== 场景 2: PostgreSQL 协议特性 ===" << std::endl;
-    
-    ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test", 
-                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5),
-                        BackendProtocol::PostgreSQL);
-    
-    auto conn = pool.getConnection(std::chrono::seconds(5));
-    if (!conn) {
-        std::cout << "无法获取连接" << std::endl;
+void example_pg_protocol_features(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 2: PostgreSQL 协议特性 ===\n";
+
+    auto pool = createPGPool(cfg, 2, 5);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过\n";
         return;
     }
-    
+
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (!conn) return;
+
     // PostgreSQL 特有查询
-    std::vector<std::string> pg_queries = {
-        // 版本查询
-        "SELECT version()",
-        // 当前数据库
-        "SELECT current_database()",
-        // 当前用户
-        "SELECT current_user",
-        // 当前时间
-        "SELECT now()",
-        // 序列操作
-        "CREATE SEQUENCE IF NOT EXISTS test_seq",
-        "SELECT nextval('test_seq')",
-        // JSON 操作 (PostgreSQL 特有)
-        "SELECT '{\"key\": \"value\"}'::json ->> 'key'",
-        // 数组操作 (PostgreSQL 特有)
-        "SELECT ARRAY[1, 2, 3] || ARRAY[4, 5]",
-        // 范围类型 (PostgreSQL 特有)
-        "SELECT '[1,10]'::int4range"
-    };
-    
-    for (const auto& sql : pg_queries) {
-        if (conn->execute(sql)) {
-            std::cout << "OK: " << sql.substr(0, 40) << "..." << std::endl;
-        } else {
-            std::cout << "FAIL: " << sql << std::endl;
-        }
-    }
-    
-    pool.returnConnection(conn);
+    std::cout << "\n  --- JSON 操作 ---\n";
+    printResult(conn, "SELECT '{\"key\": \"value\"}'::json ->> 'key' AS json_value");
+
+    std::cout << "\n  --- 数组操作 ---\n";
+    printResult(conn, "SELECT ARRAY[1, 2, 3] || ARRAY[4, 5] AS merged_array");
+
+    std::cout << "\n  --- 范围类型 ---\n";
+    printResult(conn, "SELECT '[1,10]'::int4range AS num_range");
+
+    std::cout << "\n  --- 时间函数 ---\n";
+    printResult(conn, "SELECT now() AS current_time, date_trunc('hour', now()) AS hour_start");
+
+    pool->returnConnection(conn);
 }
 
 // ============================================================================
 // 场景 3: PostgreSQL 事务处理
 // ============================================================================
 
-void example_pg_transaction() {
-    std::cout << "\n=== 场景 3: PostgreSQL 事务处理 ===" << std::endl;
-    
-    ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        5, 20, std::chrono::seconds(30), std::chrono::seconds(5),
-                        BackendProtocol::PostgreSQL);
-    
-    auto conn = pool.getConnection(std::chrono::seconds(5));
-    if (!conn) {
-        std::cout << "无法获取连接" << std::endl;
+void example_pg_transaction(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 3: PostgreSQL 事务处理 ===\n";
+
+    auto pool = createPGPool(cfg, 1, 3);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过\n";
         return;
     }
-    
-    // PostgreSQL 事务控制
-    std::cout << "开始事务..." << std::endl;
-    
-    // 开始事务
-    conn->execute("BEGIN");
-    
+
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (!conn) return;
+
     // 创建测试表
-    conn->execute("CREATE TABLE IF NOT EXISTS pg_test (id SERIAL PRIMARY KEY, name VARCHAR(100))");
-    
-    // 插入数据
-    conn->execute("INSERT INTO pg_test (name) VALUES ('Alice')");
-    conn->execute("INSERT INTO pg_test (name) VALUES ('Bob')");
-    
-    // 查询
-    if (conn->execute("SELECT * FROM pg_test")) {
-        std::cout << "查询成功" << std::endl;
-    }
-    
-    // 提交事务
-    conn->execute("COMMIT");
-    std::cout << "事务已提交" << std::endl;
-    
-    // 回滚示例 (演示用，不实际执行)
-    std::cout << "\n回滚示例:" << std::endl;
-    conn->execute("BEGIN");
-    conn->execute("INSERT INTO pg_test (name) VALUES ('Charlie')");
-    conn->execute("ROLLBACK");
-    std::cout << "事务已回滚" << std::endl;
-    
-    pool.returnConnection(conn);
+    std::cout << "  创建测试表...\n";
+    execSQL(conn, "DROP TABLE IF EXISTS pg_proxy_test");
+    execSQL(conn, "CREATE TABLE pg_proxy_test (id SERIAL PRIMARY KEY, name VARCHAR(100))");
+
+    // 事务：提交
+    std::cout << "\n  --- 事务提交示例 ---\n";
+    execSQL(conn, "BEGIN");
+    execSQL(conn, "INSERT INTO pg_proxy_test (name) VALUES ('Alice')");
+    execSQL(conn, "INSERT INTO pg_proxy_test (name) VALUES ('Bob')");
+    execSQL(conn, "COMMIT");
+    std::cout << "  事务已提交\n";
+
+    std::cout << "\n  --- 查询已提交的数据 ---\n";
+    printResult(conn, "SELECT * FROM pg_proxy_test");
+
+    // 事务：回滚
+    std::cout << "\n  --- 事务回滚示例 ---\n";
+    execSQL(conn, "BEGIN");
+    execSQL(conn, "INSERT INTO pg_proxy_test (name) VALUES ('Charlie')");
+    std::cout << "  已插入 Charlie（未提交）\n";
+    execSQL(conn, "ROLLBACK");
+    std::cout << "  事务已回滚\n";
+
+    std::cout << "\n  --- Charlie 不应存在 ---\n";
+    printResult(conn, "SELECT * FROM pg_proxy_test");
+
+    // 清理
+    execSQL(conn, "DROP TABLE pg_proxy_test");
+    pool->returnConnection(conn);
 }
 
 // ============================================================================
-// 场景 4: PostgreSQL 连接参数
+// 场景 4: PostgreSQL LISTEN/NOTIFY
 // ============================================================================
 
-void example_pg_connection_params() {
-    std::cout << "\n=== 场景 4: PostgreSQL 连接参数 ===" << std::endl;
-    
-    // PostgreSQL 支持丰富的连接参数
-    struct PGConnectionParams {
-        std::string application_name = "db-proxy-demo";
-        std::string client_encoding = "UTF8";
-        std::string timezone = "Asia/Shanghai";
-        int connect_timeout = 10;
-        int statement_timeout = 30000;  // 30秒
-        bool binary_output = false;
-    };
-    
-    PGConnectionParams params;
-    
-    std::cout << "PostgreSQL 连接参数配置:" << std::endl;
-    std::cout << "  application_name: " << params.application_name << std::endl;
-    std::cout << "  client_encoding: " << params.client_encoding << std::endl;
-    std::cout << "  timezone: " << params.timezone << std::endl;
-    std::cout << "  connect_timeout: " << params.connect_timeout << "s" << std::endl;
-    std::cout << "  statement_timeout: " << params.statement_timeout << "ms" << std::endl;
-    std::cout << "  binary_output: " << (params.binary_output ? "true" : "false") << std::endl;
-    
-    // 应用场景
-    std::cout << "\n应用场景:" << std::endl;
-    std::cout << "  - application_name: 用于 pg_stat_activity 查看连接来源" << std::endl;
-    std::cout << "  - statement_timeout: 防止慢查询占用连接" << std::endl;
-    std::cout << "  - binary_output: 提高大量数据传输效率" << std::endl;
-}
+void example_pg_listen_notify(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 4: PostgreSQL LISTEN/NOTIFY ===\n";
 
-// ============================================================================
-// 场景 5: PostgreSQL LISTEN/NOTIFY (发布订阅)
-// ============================================================================
-
-void example_pg_listen_notify() {
-    std::cout << "\n=== 场景 5: PostgreSQL LISTEN/NOTIFY ===" << std::endl;
-    
-    ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        2, 10, std::chrono::seconds(30), std::chrono::seconds(5),
-                        BackendProtocol::PostgreSQL);
-    
-    // 注意: LISTEN/NOTIFY 是异步机制，需要长连接
-    // 这里演示概念，实际使用需要单独的连接处理通知
-    
-    std::cout << "PostgreSQL LISTEN/NOTIFY 机制:" << std::endl;
-    std::cout << "  1. NOTIFY 'channel': 发送通知" << std::endl;
-    std::cout << "  2. LISTEN 'channel': 订阅通道" << std::endl;
-    std::cout << "  3. 通知通过连接异步传递" << std::endl;
-    
-    auto conn = pool.getConnection(std::chrono::seconds(5));
-    if (!conn) {
-        std::cout << "无法获取连接" << std::endl;
+    auto pool = createPGPool(cfg, 1, 2);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过\n";
         return;
     }
-    
-    // 订阅通知
-    conn->execute("LISTEN my_channel");
-    std::cout << "已订阅 my_channel" << std::endl;
-    
-    // 发送通知 (通常在另一个连接/进程中)
-    conn->execute("NOTIFY my_channel, 'Hello from PostgreSQL!'");
-    std::cout << "已发送通知" << std::endl;
-    
-    pool.returnConnection(conn);
+
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (!conn) return;
+
+    // LISTEN
+    std::cout << "  执行 LISTEN db_proxy_channel...\n";
+    execSQL(conn, "LISTEN db_proxy_channel");
+
+    // NOTIFY（同一连接可同时 LISTEN 和 NOTIFY）
+    std::cout << "  执行 NOTIFY db_proxy_channel...\n";
+    execSQL(conn, "NOTIFY db_proxy_channel, 'hello from db-proxy'");
+
+    std::cout << "  ✓ LISTEN/NOTIFY 命令已发送\n";
+    std::cout << "  注: 异步通知需通过协议的 NotificationResponse 消息接收\n";
+
+    pool->returnConnection(conn);
 }
 
 // ============================================================================
-// 场景 6: PostgreSQL COPY 协议 (批量导入)
+// 场景 5: PostgreSQL 连接池健康检查
 // ============================================================================
 
-void example_pg_copy() {
-    std::cout << "\n=== 场景 6: PostgreSQL COPY 协议 ===" << std::endl;
-    
-    ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        3, 10, std::chrono::seconds(30), std::chrono::seconds(5),
-                        BackendProtocol::PostgreSQL);
-    
-    std::cout << "PostgreSQL COPY 协议特性:" << std::endl;
-    std::cout << "  - 高速批量数据导入/导出" << std::endl;
-    std::cout << "  - 直接通过协议传输，跳过 SQL 解析" << std::endl;
-    std::cout << "  - 比 INSERT 快 3-5 倍" << std::endl;
-    
-    auto conn = pool.getConnection(std::chrono::seconds(5));
-    if (!conn) {
-        std::cout << "无法获取连接" << std::endl;
+void example_pg_health_check(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 5: PostgreSQL 连接池健康检查 ===\n";
+
+    auto pool = createPGPool(cfg, 3, 10);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过\n";
         return;
     }
-    
-    // COPY FROM stdin 示例 (伪代码)
-    std::cout << "\nCOPY 使用示例:" << std::endl;
-    std::cout << "  COPY my_table FROM stdin;" << std::endl;
-    std::cout << "  1\\tAlice\\talice@example.com" << std::endl;
-    std::cout << "  2\\tBob\\tbob@example.com" << std::endl;
-    std::cout << "  \\." << std::endl;
-    
-    // COPY TO stdout 示例
-    conn->execute("COPY (SELECT 1, 'test') TO stdout");
-    
-    pool.returnConnection(conn);
+
+    std::cout << "  健康检查前: 总=" << pool->totalConnections()
+              << ", 空闲=" << pool->idleConnections() << "\n";
+
+    pool->healthCheck();
+
+    std::cout << "  健康检查后: 总=" << pool->totalConnections()
+              << ", 空闲=" << pool->idleConnections() << "\n";
+
+    // 通过查询展示 PG 内置监控
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (conn) {
+        std::cout << "\n  --- pg_stat_activity（当前连接）---\n";
+        printResult(conn, "SELECT pid, usename, application_name, state, query "
+                          "FROM pg_stat_activity WHERE datname = current_database() LIMIT 5");
+        pool->returnConnection(conn);
+    }
 }
 
 // ============================================================================
-// 场景 7: PostgreSQL 连接池健康检查
+// 场景 6: PostgreSQL 多连接池管理
 // ============================================================================
 
-void example_pg_health_check() {
-    std::cout << "\n=== 场景 7: PostgreSQL 健康检查 ===" << std::endl;
-    
-    ConnectionPool pool("127.0.0.1", PG_PORT, "postgres", "postgres", "test",
-                        5, 10, std::chrono::seconds(30), std::chrono::seconds(5),
-                        BackendProtocol::PostgreSQL);
-    pool.warmup();
-    
-    std::cout << "健康检查前: 总=" << pool.totalConnections()
-              << ", 空闲=" << pool.idleConnections() << std::endl;
-    
-    // PostgreSQL 健康检查使用 SELECT 1 (与 MySQL 相同)
-    pool.healthCheck();
-    
-    std::cout << "健康检查后: 总=" << pool.totalConnections()
-              << ", 空闲=" << pool.idleConnections() << std::endl;
-    
-    // PostgreSQL 特有健康检查
-    std::cout << "\nPostgreSQL 特有检查:" << std::endl;
-    std::cout << "  - pg_stat_activity: 检查连接状态" << std::endl;
-    std::cout << "  - pg_stat_database: 检查数据库健康" << std::endl;
-    std::cout << "  - pg_replication_slots: 检查复制槽" << std::endl;
-}
+void example_pg_multi_database(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 6: PostgreSQL 多连接池管理 ===\n";
 
-// ============================================================================
-// 场景 8: MySQL vs PostgreSQL 对比
-// ============================================================================
-
-void example_mysql_vs_pg() {
-    std::cout << "\n=== 场景 8: MySQL vs PostgreSQL 协议对比 ===" << std::endl;
-    
-    std::cout << "┌─────────────────┬──────────────────┬──────────────────┐" << std::endl;
-    std::cout << "│     特性        │      MySQL       │    PostgreSQL    │" << std::endl;
-    std::cout << "├─────────────────┼──────────────────┼──────────────────┤" << std::endl;
-    std::cout << "│ 默认端口         │      3306        │      5432        │" << std::endl;
-    std::cout << "│ 认证协议        │    SHA256        │    md5/SCRAM     │" << std::endl;
-    std::cout << "│ 整数编码        │    LENENC        │      2/4/8B      │" << std::endl;
-    std::cout << "│ 字符串编码      │     字节码       │      UTF-8       │" << std::endl;
-    std::cout << "│ 预处理语句      │     占位符?      │    占位符$1..   │" << std::endl;
-    std::cout << "│ 事务隔离        │    4 级          │    4 级 + SSI   │" << std::endl;
-    std::cout << "│ 特殊功能        │   LOAD DATA      │   COPY/LISTEN    │" << std::endl;
-    std::cout << "│ 数据类型        │   较简单         │   丰富(范围/JSON)│" << std::endl;
-    std::cout << "│ 复制协议        │    binlog        │    WAL          │" << std::endl;
-    std::cout << "└─────────────────┴──────────────────┴──────────────────┘" << std::endl;
-    
-    std::cout << "\n选择建议:" << std::endl;
-    std::cout << "  MySQL: 互联网业务，读多写少，简单高效" << std::endl;
-    std::cout << "  PostgreSQL: 企业级应用，复杂查询，数据一致性" << std::endl;
-}
-
-// ============================================================================
-// 场景 9: PostgreSQL 连接池多数据库管理
-// ============================================================================
-
-void example_pg_multi_database() {
-    std::cout << "\n=== 场景 9: PostgreSQL 多数据库管理 ===" << std::endl;
-    
     auto& manager = PoolManager::instance();
-    
-    // 添加多个 PostgreSQL 数据库连接池
-    manager.addPool("pg_main", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 20,
-                    BackendProtocol::PostgreSQL);
-    manager.addPool("pg_analytics", "127.0.0.1", PG_PORT, "postgres", "postgres", "analytics", 3, 10,
-                    BackendProtocol::PostgreSQL);
-    manager.addPool("pg_readonly", "127.0.0.1", PG_PORT, "postgres", "postgres", "main_db", 5, 30,
-                    BackendProtocol::PostgreSQL);
-    
-    std::cout << "已添加 3 个 PostgreSQL 连接池" << std::endl;
-    
-    // 获取所有池状态
+
+    // 使用同一 PG 实例的不同数据库
+    bool ok = true;
+    ok &= manager.addPool("pg_default", cfg.host, cfg.port,
+                           cfg.user, cfg.password, cfg.database,
+                           2, 10, BackendProtocol::PostgreSQL);
+    // 尝试连接 postgres 库（系统默认库，通常存在）
+    ok &= manager.addPool("pg_system", cfg.host, cfg.port,
+                           cfg.user, cfg.password, "postgres",
+                           2, 5, BackendProtocol::PostgreSQL);
+
+    if (!ok) {
+        std::cout << "  ⚠ 部分连接池创建失败\n";
+    }
+
+    // 展示所有池状态
     auto stats = manager.getAllStats();
     for (const auto& s : stats) {
-        std::cout << "池 [" << s.name << "]: 总=" << s.total
-                  << ", 空闲=" << s.idle
-                  << ", 忙碌=" << s.busy << std::endl;
+        std::cout << "  池 [" << s.name << "]: 总=" << s.total
+                  << ", 空闲=" << s.idle << ", 忙碌=" << s.busy << "\n";
     }
-    
-    // 从指定池获取连接
-    auto conn = manager.getConnection("pg_main");
+
+    // 从池中获取连接并查询
+    auto conn = manager.getConnection("pg_default");
     if (conn) {
-        std::cout << "从 pg_main 获取连接成功" << std::endl;
-        conn->execute("SELECT current_database()");
-        manager.returnConnection("pg_main", conn);
+        std::cout << "\n  --- 从 pg_default 查询 ---\n";
+        printResult(conn, "SELECT current_database(), inet_server_port()");
+        manager.returnConnection("pg_default", conn);
     }
-    
-    // 关闭所有池
+
+    auto conn2 = manager.getConnection("pg_system");
+    if (conn2) {
+        std::cout << "\n  --- 从 pg_system 查询 ---\n";
+        printResult(conn2, "SELECT current_database(), inet_server_port()");
+        manager.returnConnection("pg_system", conn2);
+    }
+
     manager.shutdownAll();
-    std::cout << "所有连接池已关闭" << std::endl;
+    std::cout << "\n  ✓ 所有连接池已关闭\n";
 }
 
 // ============================================================================
-// 场景 10: PostgreSQL 性能监控
+// 场景 7: PostgreSQL 性能监控
 // ============================================================================
 
-void example_pg_metrics() {
-    std::cout << "\n=== 场景 10: PostgreSQL 性能监控 ===" << std::endl;
-    
-    auto& metrics = Metrics::instance();
+void example_pg_metrics(const PGConfig& cfg) {
+    std::cout << "\n=== 场景 7: PostgreSQL 性能监控 ===\n";
+
+    auto pool = createPGPool(cfg, 2, 5);
+    if (!pool->warmup()) {
+        std::cout << "  ✗ 连接池预热失败，跳过\n";
+        return;
+    }
+
     auto& stats = Statistics::instance();
-    
-    // PostgreSQL 特有指标
-    std::cout << "PostgreSQL 特有监控指标:" << std::endl;
-    std::cout << "  - pg_stat_bgwriter: 后台写入统计" << std::endl;
-    std::cout << "  - pg_stat_database: 数据库统计" << std::endl;
-    std::cout << "  - pg_stat_user_tables: 表级统计" << std::endl;
-    std::cout << "  - pg_stat_activity: 活动连接" << std::endl;
-    
-    // 模拟查询统计
+
+    // 模拟一批 PG 查询统计
     std::vector<std::pair<std::string, std::string>> pg_queries = {
         {"SELECT * FROM users WHERE id = $1", "SELECT"},
         {"INSERT INTO orders VALUES ($1, $2, $3)", "INSERT"},
@@ -408,20 +381,23 @@ void example_pg_metrics() {
         {"UPDATE inventory SET stock = stock - $1 WHERE id = $2", "UPDATE"},
         {"SELECT pg_database_size(current_database())", "SELECT"}
     };
-    
+
     for (const auto& [sql, type] : pg_queries) {
-        stats.recordQuery(sql, type, "postgres", 10 + (rand() % 50));
+        stats.recordQuery(sql, type, cfg.database, 10 + (rand() % 50));
     }
-    
-    // 输出统计
-    std::cout << "\n--- 统计输出 ---" << std::endl;
-    std::cout << "QPS: " << stats.getQPS() << std::endl;
-    std::cout << "Read QPS: " << stats.getReadQPS() << std::endl;
-    std::cout << "Write QPS: " << stats.getWriteQPS() << std::endl;
-    
-    // PostgreSQL 格式输出
-    std::cout << "\n--- PostgreSQL JSON 输出 ---" << std::endl;
-    std::cout << stats.toJSON() << std::endl;
+
+    std::cout << "  QPS: " << stats.getQPS() << "\n";
+    std::cout << "  Read QPS: " << stats.getReadQPS() << "\n";
+    std::cout << "  Write QPS: " << stats.getWriteQPS() << "\n";
+
+    // 通过真实 PG 查询获取数据库统计
+    auto conn = pool->getConnection(std::chrono::seconds(5));
+    if (conn) {
+        std::cout << "\n  --- pg_stat_database ---\n";
+        printResult(conn, "SELECT datname, numbackends, xact_commit, xact_rollback, blks_read "
+                          "FROM pg_stat_database WHERE datname = current_database()");
+        pool->returnConnection(conn);
+    }
 }
 
 // ============================================================================
@@ -429,31 +405,47 @@ void example_pg_metrics() {
 // ============================================================================
 
 int main() {
-    Logger::instance().init("", LogLevel::WARN);
-    
-    std::cout << "========================================" << std::endl;
-    std::cout << "   DB-Proxy PostgreSQL 场景化用例集" << std::endl;
-    std::cout << "========================================" << std::endl;
-    
-    // 注意: 这些示例需要 PostgreSQL 服务器运行才能正常工作
-    // 以下用例可以在没有数据库的情况下测试监控部分
-    
-    // example_pg_basic_usage();           // 需要 PostgreSQL
-    // example_pg_protocol_features();      // 需要 PostgreSQL
-    // example_pg_transaction();            // 需要 PostgreSQL
-    // example_pg_listen_notify();          // 需要 PostgreSQL
-    // example_pg_copy();                  // 需要 PostgreSQL
-    // example_pg_health_check();           // 需要 PostgreSQL
-    // example_pg_multi_database();        // 需要 PostgreSQL
-    
-    // 不需要数据库连接的用例
-    example_pg_connection_params();     // 仅配置展示
-    example_mysql_vs_pg();               // 对比展示
-    example_pg_metrics();                // 监控统计
-    
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "            用例测试完成" << std::endl;
-    std::cout << "========================================" << std::endl;
-    
+    Logger::instance().init("./logs/pg_examples.log", LogLevel::INFO);
+
+    std::cout << "========================================\n";
+    std::cout << "   DB-Proxy PostgreSQL 场景化用例集\n";
+    std::cout << "   （真实 PG 后端协议连接）\n";
+    std::cout << "========================================\n";
+
+    PGConfig cfg = detectPGConfig();
+    std::cout << "\nPG 配置: " << cfg.user << "@" << cfg.host
+              << ":" << cfg.port << "/" << cfg.database << "\n";
+
+    // 先测试 PG 是否可用
+    {
+        auto test_pool = createPGPool(cfg, 1, 1);
+        if (!test_pool->warmup()) {
+            std::cout << "\n✗ PostgreSQL 不可用，请确认服务已启动。\n";
+            std::cout << "  启动方式:\n";
+            std::cout << "    Docker: docker compose -f docker-compose-pg.yml up -d\n";
+            std::cout << "    Homebrew: brew services start postgresql@18\n";
+            std::cout << "  环境变量: PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE\n";
+            return 1;
+        }
+        auto conn = test_pool->getConnection(std::chrono::seconds(3));
+        if (conn) {
+            std::cout << "✓ PostgreSQL 连接成功\n";
+            test_pool->returnConnection(conn);
+        }
+    }
+
+    // 运行所有场景
+    example_pg_basic_usage(cfg);
+    example_pg_protocol_features(cfg);
+    example_pg_transaction(cfg);
+    example_pg_listen_notify(cfg);
+    example_pg_health_check(cfg);
+    example_pg_multi_database(cfg);
+    example_pg_metrics(cfg);
+
+    std::cout << "\n========================================\n";
+    std::cout << "   用例测试完成\n";
+    std::cout << "========================================\n";
+
     return 0;
 }
