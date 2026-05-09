@@ -46,7 +46,7 @@ struct Config {
     std::vector<DatabaseConfig> databases;
     MonitoringConfig monitoring;
     std::string log_level = "INFO";
-    std::string log_file = "/var/log/db-proxy/proxy.log";
+    std::string log_file = "./logs/proxy.log";
 };
 
 Config loadConfig(const std::string& config_file);

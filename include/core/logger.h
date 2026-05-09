@@ -5,7 +5,9 @@
 #include <memory>
 #include <source_location>
 #include <sstream>
+#include <fstream>
 #include <utility>
+#include <mutex>
 
 namespace dbproxy {
 
@@ -36,12 +38,15 @@ private:
     ~Logger() = default;
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
-    
+
     std::string formatTime();
     std::string levelToString(LogLevel level);
-    
+
     LogLevel min_level_ = LogLevel::INFO;
     bool initialized_ = false;
+    std::string log_file_;
+    std::ofstream file_stream_;
+    std::mutex mutex_;
 };
 
 namespace detail {

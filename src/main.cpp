@@ -37,17 +37,17 @@ void signalHandler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
-    // 初始化日志
-    Logger::instance().init("/var/log/db-proxy/proxy.log", LogLevel::INFO);
+    // 初始化日志（使用项目本地目录，避免 /var/log 权限问题）
+    Logger::instance().init("./logs/proxy.log", LogLevel::INFO);
     LOG_INFO("=== Database Proxy Starting ===");
-    
+
     // 加载配置
     Config config;
     config.server.host = "0.0.0.0";
-    config.server.port = 3306;
+    config.server.port = 6033;  // 代理监听端口，避免与后端 MySQL 3306 冲突
     config.server.max_connections = 10000;
-    
-    // 添加数据库连接池
+
+    // 添加数据库连接池（连接后端 MySQL 3306）
     PoolManager::instance().addPool(
         "default",
         "127.0.0.1", 3306,
