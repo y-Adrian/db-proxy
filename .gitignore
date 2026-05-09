@@ -1,1 +1,28 @@
-build
+# 编译产物（out-of-source build 目录）
+build/
+
+# 源码目录下的意外产物（防止在根目录直接运行 cmake）
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+
+# 临时文件
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 日志
+*.log
+logs/

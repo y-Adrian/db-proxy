@@ -120,66 +120,118 @@ db-proxy/
 
 ## 编译运行
 
-```bash
-# 编译
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j4
+所有编译产物输出到 `build/` 目录，不污染源码目录，且该目录已被 `.gitignore` 忽略。
 
-# 运行
+### 快速编译
+
+```bash
+# 标准 out-of-source build（推荐）
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+cd ..
+
+# 编译完成后，所有二进制在 build/ 下：
+#   build/db-proxy       主程序
+#   build/examples        MySQL 场景化用例
+#   build/examples_pg    PostgreSQL 场景化用例
+#   build/test_pool      单元测试
+#   build/bench_pool     性能测试
+#   build/stress_test    压力测试
+#   build/dbcli          CLI 工具
+#   build/diagnostics_demo  诊断模块示例
+```
+
+### 运行主程序
+
+```bash
+cd build
 ./db-proxy
 ```
 
-## 数据库支持
+---
 
-### MySQL
+## 数据库测试
 
-```bash
-# 启动 MySQL 测试环境
-docker-compose -f docker-compose.yml up -d
+项目提供两个测试脚本，均支持 **local**（连接本地数据库）和 **docker**（容器化）两种模式，编译产物统一输出到 `build/` 目录。
 
-# 运行 MySQL 用例
-./examples
-
-# MySQL 默认配置
-host: 127.0.0.1
-port: 3306
-user: root
-password: (empty)
-database: test
-```
-
-### PostgreSQL
+### PostgreSQL 测试
 
 ```bash
-# 启动 PostgreSQL 测试环境
-docker-compose -f docker-compose-pg.yml up -d
+# 默认 local 模式，连接本地 PostgreSQL
+./test_with_pg.sh
 
-# 运行 PostgreSQL 用例
-./examples_pg
+# 显式指定模式
+./test_with_pg.sh --mode local   # 连接本地 PG
+./test_with_pg.sh --mode docker  # 通过 Docker 启动 PG 容器
 
-# PostgreSQL 默认配置
-host: 127.0.0.1
-port: 5432
-user: postgres
-password: postgres
-database: test
+# 兼容旧用法（start/stop/restart/test）
+./test_with_pg.sh start    # 启动环境并运行测试
+./test_with_pg.sh stop     # 停止 Docker 容器
+./test_with_pg.sh restart  # 重启 Docker 容器
+./test_with_pg.sh test     # 仅测试连接
 ```
+
+**local 模式环境变量**（可选，均有默认值）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PGHOST` | `127.0.0.1` | PostgreSQL 主机 |
+| `PGPORT` | `5432` | PostgreSQL 端口 |
+| `PGUSER` | 当前系统用户名 | PostgreSQL 用户 |
+| `PGPASSWORD` | 空 | PostgreSQL 密码（Homebrew PG 通常无密码） |
+| `PGDATABASE` | `test` | 测试数据库名 |
+
+> macOS Homebrew 安装的 PostgreSQL 默认使用当前用户名、无密码，脚本会自动检测并创建 `test` 数据库。
+
+### MySQL 测试
+
+```bash
+# 默认 local 模式，连接本地 MySQL
+./test_with_mysql.sh
+
+# 显式指定模式
+./test_with_mysql.sh --mode local   # 连接本地 MySQL
+./test_with_mysql.sh --mode docker  # 通过 Docker 启动 MySQL 容器
+
+# 停止 Docker 容器
+./test_with_mysql.sh stop
+```
+
+**local 模式环境变量**（可选，均有默认值）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MYSQL_HOST` | `127.0.0.1` | MySQL 主机 |
+| `MYSQL_PORT` | `3306` | MySQL 端口 |
+| `MYSQL_USER` | `root` | MySQL 用户 |
+| `MYSQL_PASSWORD` | 空 | MySQL 密码 |
+| `MYSQL_DATABASE` | `test` | 测试数据库名 |
+
+---
 
 ## 功能示例
+
+所有示例二进制在编译后位于 `build/` 目录下。
 
 ### MySQL 用例
 
 ```bash
-# 查看 MySQL 用例
+# 查看源码
 cat examples/examples.cpp
+
+# 运行（需先编译，且本地 MySQL 可用）
+cd build && ./examples
 ```
 
 ### PostgreSQL 用例
 
 ```bash
-# 查看 PostgreSQL 用例
+# 查看源码
 cat examples/examples_pg.cpp
+
+# 运行（需先编译，且本地 PostgreSQL 可用）
+cd build && ./examples_pg
 ```
 
 主要场景包括：
@@ -187,11 +239,13 @@ cat examples/examples_pg.cpp
 - 协议特性演示
 - 事务处理
 - 连接参数配置
-- LISTEN/NOTIFY 机制
-- COPY 批量导入
+- LISTEN/NOTIFY 机制（PG）
+- COPY 批量导入（PG）
 - 健康检查
 - 多数据库管理
 - 性能监控
+
+---
 
 ## 扩展方向
 
