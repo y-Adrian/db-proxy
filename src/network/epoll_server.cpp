@@ -267,4 +267,19 @@ int EpollServer::getActiveConnectionCount() const {
     return static_cast<int>(connections_.size());
 }
 
+std::shared_ptr<TcpConnection> EpollServer::takeConnection(int fd) {
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) {
+        return nullptr;
+    }
+    auto conn = it->second;
+#if defined(__linux__)
+    if (epoll_fd_ >= 0) {
+        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
+    }
+#endif
+    connections_.erase(it);
+    return conn;
+}
+
 }  // namespace dbproxy

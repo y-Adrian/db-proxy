@@ -6,9 +6,10 @@
 #   --mode docker  通过 Docker 启动 MySQL 容器
 #
 # 用法：
-#   ./test_with_mysql.sh                  # 默认 local 模式
+#   ./test_with_mysql.sh                  # 默认 local 模式，仅 MySQL 场景化用例
 #   ./test_with_mysql.sh --mode docker    # Docker 模式
 #   ./test_with_mysql.sh --mode local     # 显式 local 模式
+#   ./test_with_mysql.sh --also-pg        # 在 MySQL 用例之后额外跑 PG 用例（需本机 PG）
 #   ./test_with_mysql.sh stop             # 停止 Docker 容器（仅 docker 模式需要）
 
 set -e
@@ -39,12 +40,17 @@ DOCKER_CONTAINER_NAME="db-proxy-mysql"
 # 参数解析
 # ============================================================================
 MODE="local"
+ALSO_PG=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)
             MODE="$2"
             shift 2
+            ;;
+        --also-pg)
+            ALSO_PG=1
+            shift
             ;;
         stop)
             stop_docker
@@ -56,6 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "选项:"
             echo "  --mode local    连接本地 MySQL（默认）"
             echo "  --mode docker   通过 Docker 启动 MySQL"
+            echo "  --also-pg       MySQL 用例后再运行 PostgreSQL 场景化用例（可选）"
             echo "  stop            停止 Docker 容器"
             echo "  -h, --help      显示帮助"
             echo ""
@@ -242,11 +249,11 @@ run_tests() {
         ./examples || true
     fi
 
-    # 运行 PG 示例
-    if [[ -f ./examples_pg ]]; then
+    # PostgreSQL 用例请使用 ./test_with_pg.sh；此处仅在显式传入 --also-pg 时附加运行
+    if [[ "${ALSO_PG}" -eq 1 && -f ./examples_pg ]]; then
         echo ""
         echo -e "${CYAN}========================================"
-        echo "   PostgreSQL 场景化用例"
+        echo "   PostgreSQL 场景化用例（--also-pg）"
         echo -e "========================================${NC}"
         ./examples_pg || true
     fi

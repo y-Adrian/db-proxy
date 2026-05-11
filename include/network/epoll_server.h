@@ -39,7 +39,10 @@ public:
     void stop();
     
     int getActiveConnectionCount() const;
-    
+
+    /** 从多路复用中摘除该 fd（不再由本 Server 驱动读写），返回连接对象；用于工作线程接管。 */
+    std::shared_ptr<TcpConnection> takeConnection(int fd);
+
 private:
     void handleNewConnection();
     void updateChannel(int fd, uint32_t events);

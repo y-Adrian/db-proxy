@@ -31,6 +31,8 @@ set(NETWORK_SOURCES
 set(PROTOCOL_SOURCES
     src/protocol/mysql_packet.cpp
     src/protocol/mysql_parser.cpp
+    src/protocol/mysql_relay.cpp
+    src/protocol/mysql_session_relay.cpp
     src/protocol/protocol_handler.cpp
 )
 

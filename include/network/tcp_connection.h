@@ -31,6 +31,8 @@ public:
     ~TcpConnection();
     
     int fd() const { return fd_; }
+    /** 将 fd 交给调用方并在本对象中置为 -1，避免析构时 close；用于会话级透明中继。 */
+    int releaseFd();
     State state() const { return state_; }
     const std::string& remoteIp() const { return remote_ip_; }
     uint16_t remotePort() const { return remote_port_; }

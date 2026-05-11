@@ -3,7 +3,7 @@
  * @brief 数据库代理中间件 - 主程序入口
  *
  * 修复清单（相对于原始版本）：
- *   Fix-1  实现客户端 → 后端 → 客户端的完整数据转发（原 TODO 占位符）
+ *   Fix-1  MySQL 透明会话代理：accept 后工作线程对客户端与后端做双向字节转发（含握手/认证）
  *   Fix-2  使用 INI 配置文件（proxy.conf），不再硬编码参数
  *   Fix-3  后台线程改用 std::jthread + std::stop_token，保证优雅退出
  *   Fix-4  新增 RequestWorkerPool，将阻塞式后端 I/O 移出 epoll 事件循环
@@ -17,7 +17,7 @@
 #include "monitor/performance_analyzer.h"
 #include "core/logger.h"
 #include "core/config.h"
-#include "protocol/mysql_parser.h"
+#include "protocol/mysql_session_relay.h"
 
 #include <atomic>
 #include <chrono>
@@ -27,8 +27,8 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dbproxy;
 
@@ -110,111 +110,6 @@ private:
 };
 
 // ============================================================================
-// Fix-1: 完整的双向数据转发
-//
-// 流程：
-//   1. 从连接池取得一个后端连接
-//   2. 将客户端原始字节原样发给后端（sendRaw）
-//   3. 循环读取后端响应并转发回客户端（recvRaw → conn->sendInLoop）
-//   4. 将后端连接归还连接池
-//
-// 关于响应结束判断：
-//   MySQL 协议的完整响应边界需要解析包头。此处采用"短超时读取"策略：
-//   若 recvRaw 在 50 ms 内无数据则认为本次响应已结束。
-//   对于大结果集，循环会持续读取直至 50 ms 静默。
-//   生产级实现应解析 MySQL 包边界（OK/EOF/ERR 包），此处保留
-//   TODO 注释以标记改进点。
-// ============================================================================
-static void forwardRequest(
-        std::shared_ptr<TcpConnection> conn,
-        std::vector<char> data,
-        const std::string& pool_name,
-        std::chrono::milliseconds pool_timeout)
-{
-    auto start = std::chrono::steady_clock::now();
-
-    // 1. 统计
-    METRICS_INC("queries_total");
-
-    // 2. 解析 SQL 类型（用于路由/统计，不影响转发）
-    if (data.size() > 5) {
-        std::string sql_str(data.data(), std::min(data.size(), size_t(256)));
-        auto info = MySQLParser::parseSQL(sql_str);
-        LOG_DEBUG("SQL type: {}", static_cast<int>(info.type));
-    }
-
-    // 3. 从连接池获取后端连接
-    auto backend = PoolManager::instance().getConnection(pool_name, pool_timeout);
-    if (!backend) {
-        LOG_ERROR("Pool '{}': failed to acquire connection (timeout or pool exhausted)",
-                  pool_name);
-        METRICS_INC("pool_acquire_failures");
-        // 向客户端发送一个标准 MySQL 错误包（Error 1040: Too many connections）
-        // 格式：3字节长度 + 1字节包序号 + 0xFF + 2字节错误码 + '#' + 5字节sqlstate + 消息
-        const std::string errmsg = "Too many connections";
-        uint8_t sqlstate[] = {'H', 'Y', '0', '0', '0'};
-        std::string err_pkt;
-        uint32_t payload_len = 1 + 2 + 1 + 5 + errmsg.size();
-        err_pkt.push_back(static_cast<char>(payload_len & 0xFF));
-        err_pkt.push_back(static_cast<char>((payload_len >> 8) & 0xFF));
-        err_pkt.push_back(static_cast<char>((payload_len >> 16) & 0xFF));
-        err_pkt.push_back(static_cast<char>(0));  // seq
-        err_pkt.push_back(static_cast<char>(0xFF)); // error marker
-        err_pkt.push_back(static_cast<char>(0xE8)); // errno 1000 lo
-        err_pkt.push_back(static_cast<char>(0x03)); // errno 1000 hi
-        err_pkt.push_back('#');
-        err_pkt.append(reinterpret_cast<char*>(sqlstate), 5);
-        err_pkt.append(errmsg);
-        conn->sendInLoop(err_pkt.data(), err_pkt.size());
-        return;
-    }
-
-    // 4. 转发客户端请求到后端
-    if (!backend->sendRaw(data.data(), data.size())) {
-        LOG_ERROR("Backend sendRaw failed: {}", backend->lastError());
-        METRICS_INC("backend_send_errors");
-        PoolManager::instance().returnConnection(pool_name, backend);
-        return;
-    }
-
-    // 5. 读取后端响应并转发给客户端
-    //    TODO: 用完整的 MySQL 包边界解析替代超时启发式
-    constexpr size_t RECV_BUF = 64 * 1024;
-    std::vector<char> resp_buf(RECV_BUF);
-    bool got_any = false;
-
-    while (true) {
-        // 首包等待稍长（数据库处理可能需要几十毫秒）
-        auto timeout = got_any
-            ? std::chrono::milliseconds(50)
-            : std::chrono::milliseconds(5000);
-
-        ssize_t n = backend->recvRaw(resp_buf.data(), RECV_BUF, timeout);
-        if (n <= 0) {
-            if (!got_any) {
-                LOG_WARN("Backend returned no data for request");
-            }
-            break;
-        }
-
-        if (!conn->sendInLoop(resp_buf.data(), static_cast<size_t>(n))) {
-            LOG_WARN("Client send failed, aborting forwarding");
-            break;
-        }
-        got_any = true;
-    }
-
-    // 6. 归还连接
-    PoolManager::instance().returnConnection(pool_name, backend);
-
-    // 7. 延迟指标
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start);
-    METRICS_LATENCY("query_latency", elapsed);
-    METRICS_GAUGE_SET("avg_latency_ms", static_cast<double>(elapsed.count()));
-}
-
-// ============================================================================
 // main
 // ============================================================================
 int main(int argc, char* argv[]) {
@@ -286,33 +181,40 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    g_server->setConnectionCallback([](auto conn) {
-        LOG_DEBUG("New connection: {}:{}", conn->remoteIp(), conn->remotePort());
-        METRICS_INC("connections_total");
-        METRICS_GAUGE_SET("active_connections",
-            Metrics::instance().getGauge("active_connections") + 1);
-    });
+    g_server->setConnectionCallback(
+        [&workers, host = std::string(primary_db.host), port = primary_db.port](auto conn) {
+            LOG_DEBUG("New connection: {}:{}", conn->remoteIp(), conn->remotePort());
+            METRICS_INC("connections_total");
+            METRICS_GAUGE_SET("active_connections",
+                Metrics::instance().getGauge("active_connections") + 1);
 
-    // Fix-1: 实际转发逻辑
-    auto pool_timeout = std::chrono::milliseconds(config.pool.connection_timeout_ms);
-    g_server->setMessageCallback(
-        [&workers, pool_timeout, pool_name]
-        (auto conn, const char* data, size_t len) {
-            // 拷贝数据后立即投递，不阻塞 epoll 线程
-            std::vector<char> buf(data, data + len);
-            workers->post([conn, buf = std::move(buf), pool_timeout, pool_name]() mutable {
-                forwardRequest(conn, std::move(buf), pool_name, pool_timeout);
+            if (!g_server) {
+                return;
+            }
+            auto taken = g_server->takeConnection(conn->fd());
+            if (!taken) {
+                LOG_ERROR("Internal error: takeConnection failed for fd {}", conn->fd());
+                METRICS_GAUGE_SET("active_connections",
+                    Metrics::instance().getGauge("active_connections") - 1);
+                return;
+            }
+            const int cfd = taken->releaseFd();
+            workers->post([cfd, host, port]() {
+                runMysqlSessionRelay(cfd, host, port);
+                METRICS_GAUGE_SET("active_connections",
+                    Metrics::instance().getGauge("active_connections") - 1);
             });
-        }
-    );
+        });
+
+    // 连接已交给工作线程，不再由 Reactor 按消息回调处理
+    g_server->setMessageCallback([](auto, const char*, size_t) {});
 
     g_server->setCloseCallback([](auto conn) {
-        LOG_DEBUG("Connection closed: {}", conn->remoteIp());
-        METRICS_GAUGE_SET("active_connections",
-            Metrics::instance().getGauge("active_connections") - 1);
+        LOG_DEBUG("Connection closed (unexpected path): {}", conn->remoteIp());
     });
 
     // ---- 信号处理 ----
+    std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGINT,  signalHandler);
     std::signal(SIGTERM, signalHandler);
 

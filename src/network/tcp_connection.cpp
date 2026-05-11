@@ -20,6 +20,18 @@ TcpConnection::~TcpConnection() {
     }
 }
 
+int TcpConnection::releaseFd() {
+    const int fd = fd_;
+    fd_ = -1;
+    state_ = State::CLOSED;
+    on_message_ = nullptr;
+    on_write_complete_ = nullptr;
+    on_close_ = nullptr;
+    input_buffer_.clear();
+    output_buffer_.clear();
+    return fd;
+}
+
 ssize_t TcpConnection::read(char* buffer, size_t len) {
     ssize_t n = ::read(fd_, buffer, len);
     if (n < 0) {
