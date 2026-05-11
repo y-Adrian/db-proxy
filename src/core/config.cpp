@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <cctype>
 
 namespace dbproxy {
 
@@ -33,12 +34,13 @@ Config defaultConfig() {
     cfg.pool.enable_connection_reuse   = true;
 
     DatabaseConfig db;
-    db.host     = "127.0.0.1";
-    db.port     = 3306;
-    db.username = "root";
-    db.password = "";
-    db.database = "test";
-    db.charset  = "utf8mb4";
+    db.host      = "127.0.0.1";
+    db.port      = 3306;
+    db.username  = "root";
+    db.password  = "";
+    db.database  = "test";
+    db.charset   = "utf8mb4";
+    db.protocol  = "mysql";
     cfg.databases.push_back(db);
 
     cfg.monitoring.enable                = true;
@@ -148,6 +150,13 @@ Config loadConfig(const std::string& config_file) {
             else if (key == "password") cur_db.password = value;
             else if (key == "database" || key == "dbname") cur_db.database = value;
             else if (key == "charset")  cur_db.charset = value;
+            else if (key == "protocol" || key == "driver" || key == "type") {
+                cur_db.protocol = value;
+                std::transform(cur_db.protocol.begin(), cur_db.protocol.end(),
+                               cur_db.protocol.begin(), [](unsigned char c) {
+                                   return static_cast<char>(std::tolower(c));
+                               });
+            }
         }
         // ---- [monitor] ----
         else if (section == "monitor" || section == "monitoring") {

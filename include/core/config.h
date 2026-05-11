@@ -31,6 +31,8 @@ struct DatabaseConfig {
     std::string password;
     std::string database;
     std::string charset = "utf8mb4";
+    /** 线协议：mysql（默认）| postgresql | postgres | pg（连接池与透明代理均按此选择后端） */
+    std::string protocol = "mysql";
 };
 
 struct MonitoringConfig {

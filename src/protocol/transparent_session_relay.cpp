@@ -1,4 +1,4 @@
-#include "protocol/mysql_session_relay.h"
+#include "protocol/transparent_session_relay.h"
 #include "core/logger.h"
 
 #include <arpa/inet.h>
@@ -44,7 +44,7 @@ bool sendAll(int fd, const char* data, size_t len) {
     return true;
 }
 
-int connectMysqlBackend(const std::string& host, uint16_t port, std::string& err) {
+int connectTcpBackend(const std::string& host, uint16_t port, std::string& err) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         err = "socket";
@@ -79,17 +79,17 @@ int connectMysqlBackend(const std::string& host, uint16_t port, std::string& err
 
 }  // namespace
 
-void runMysqlSessionRelay(int client_fd, const std::string& host, uint16_t port) {
+void runTransparentTcpSessionRelay(int client_fd, const std::string& host, uint16_t port) {
     std::string err;
-    const int backend_fd = connectMysqlBackend(host, port, err);
+    const int backend_fd = connectTcpBackend(host, port, err);
     if (backend_fd < 0) {
-        LOG_ERROR("Session relay: cannot connect backend {}:{} — {}", host, port, err);
+        LOG_ERROR("Transparent session relay: cannot connect backend {}:{} — {}", host, port, err);
         ::close(client_fd);
         return;
     }
 
     if (!setBlocking(client_fd) || !setBlocking(backend_fd)) {
-        LOG_ERROR("Session relay: fcntl failed");
+        LOG_ERROR("Transparent session relay: fcntl failed");
         ::close(backend_fd);
         ::close(client_fd);
         return;
@@ -122,7 +122,6 @@ void runMysqlSessionRelay(int client_fd, const std::string& host, uint16_t port)
             break;
         }
         if (pfds[1].revents & POLLHUP) {
-            // 后端半关，仍尝试刷完客户端数据
             if (!(pfds[0].revents & POLLIN)) {
                 break;
             }
@@ -153,7 +152,7 @@ void runMysqlSessionRelay(int client_fd, const std::string& host, uint16_t port)
     ::shutdown(backend_fd, SHUT_RDWR);
     ::close(backend_fd);
     ::close(client_fd);
-    LOG_DEBUG("Session relay ended (client fd was session)");
+    LOG_DEBUG("Transparent TCP session relay ended");
 }
 
 }  // namespace dbproxy

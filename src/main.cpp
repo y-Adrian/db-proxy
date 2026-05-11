@@ -3,7 +3,7 @@
  * @brief 数据库代理中间件 - 主程序入口
  *
  * 修复清单（相对于原始版本）：
- *   Fix-1  MySQL 透明会话代理：accept 后工作线程对客户端与后端做双向字节转发（含握手/认证）
+ *   Fix-1  透明 TCP 会话代理（MySQL / PostgreSQL）：工作线程双向转发线协议
  *   Fix-2  使用 INI 配置文件（proxy.conf），不再硬编码参数
  *   Fix-3  后台线程改用 std::jthread + std::stop_token，保证优雅退出
  *   Fix-4  新增 RequestWorkerPool，将阻塞式后端 I/O 移出 epoll 事件循环
@@ -17,11 +17,13 @@
 #include "monitor/performance_analyzer.h"
 #include "core/logger.h"
 #include "core/config.h"
-#include "protocol/mysql_session_relay.h"
+#include "pool/backend_connection.h"
+#include "protocol/transparent_session_relay.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cctype>
 #include <csignal>
 #include <functional>
 #include <memory>
@@ -31,6 +33,18 @@
 #include <thread>
 
 using namespace dbproxy;
+
+namespace {
+
+bool isPostgresWireProtocol(const std::string& protocol) {
+    std::string p = protocol;
+    std::transform(p.begin(), p.end(), p.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return p == "postgresql" || p == "postgres" || p == "pg";
+}
+
+}  // namespace
 
 // ============================================================================
 // Fix-3: 全局停止标志（jthread 通过 stop_token 感知；信号处理也需要此标志）
@@ -145,6 +159,9 @@ int main(int argc, char* argv[]) {
 
     const auto& primary_db = config.databases[0];
     const std::string pool_name = "default";
+    const bool backend_is_pg = isPostgresWireProtocol(primary_db.protocol);
+    const BackendProtocol pool_proto =
+        backend_is_pg ? BackendProtocol::PostgreSQL : BackendProtocol::MySQL;
 
     bool pool_ok = PoolManager::instance().addPool(
         pool_name,
@@ -155,7 +172,7 @@ int main(int argc, char* argv[]) {
         primary_db.database,
         static_cast<size_t>(config.pool.min_connections),
         static_cast<size_t>(config.pool.max_connections),
-        BackendProtocol::MySQL,
+        pool_proto,
         std::chrono::milliseconds(config.pool.max_idle_time_ms),
         std::chrono::milliseconds(config.pool.connection_timeout_ms)
     );
@@ -164,6 +181,8 @@ int main(int argc, char* argv[]) {
                   primary_db.host, primary_db.port, primary_db.database);
         return 1;
     }
+    LOG_INFO("Backend wire protocol: {} (transparent TCP session relay)",
+             backend_is_pg ? "PostgreSQL" : "MySQL");
     LOG_INFO("Pool '{}' → {}:{}/{} (min={} max={})",
              pool_name, primary_db.host, primary_db.port, primary_db.database,
              config.pool.min_connections, config.pool.max_connections);
@@ -200,7 +219,7 @@ int main(int argc, char* argv[]) {
             }
             const int cfd = taken->releaseFd();
             workers->post([cfd, host, port]() {
-                runMysqlSessionRelay(cfd, host, port);
+                runTransparentTcpSessionRelay(cfd, host, port);
                 METRICS_GAUGE_SET("active_connections",
                     Metrics::instance().getGauge("active_connections") - 1);
             });
