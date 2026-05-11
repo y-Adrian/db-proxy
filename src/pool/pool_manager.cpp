@@ -15,7 +15,9 @@ bool PoolManager::addPool(const std::string& name,
                          const std::string& database,
                          size_t min_connections,
                          size_t max_connections,
-                         BackendProtocol protocol) {
+                         BackendProtocol protocol,
+                         std::chrono::milliseconds max_idle_time,
+                         std::chrono::milliseconds connection_timeout) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (pools_.find(name) != pools_.end()) {
@@ -26,8 +28,8 @@ bool PoolManager::addPool(const std::string& name,
     auto pool = std::make_shared<ConnectionPool>(
         host, port, user, password, database,
         min_connections, max_connections,
-        std::chrono::milliseconds(30000),
-        std::chrono::milliseconds(5000),
+        max_idle_time,
+        connection_timeout,
         protocol
     );
     

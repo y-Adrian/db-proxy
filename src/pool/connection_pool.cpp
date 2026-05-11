@@ -24,13 +24,13 @@ ConnectionPool::ConnectionPool(const std::string& host, uint16_t port,
 
 ConnectionPool::~ConnectionPool() {
     close();
-    
-    // 销毁所有连接
+
     std::lock_guard<std::mutex> lock(mutex_);
     while (!idle_queue_.empty()) {
         auto conn = idle_queue_.front();
         idle_queue_.pop();
-        conn->close();
+        idle_connections_.fetch_sub(1);
+        destroyConnection(conn);
     }
 }
 
@@ -60,56 +60,66 @@ void ConnectionPool::destroyConnection(ConnectionPtr conn) {
 }
 
 ConnectionPtr ConnectionPool::getConnection(std::chrono::milliseconds timeout) {
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+
     std::unique_lock<std::mutex> lock(mutex_);
-    
+
     while (true) {
+        if (closed_) {
+            return nullptr;
+        }
+
         // 1. 尝试从空闲队列获取
         if (!idle_queue_.empty()) {
             auto conn = idle_queue_.front();
             idle_queue_.pop();
             idle_connections_.fetch_sub(1);
-            
-            // 检查连接是否有效
+
             if (conn->isConnected() && conn->ping()) {
                 conn->setState(Connection::State::IN_USE);
                 busy_connections_.fetch_add(1);
                 conn->updateActiveTime();
                 return conn;
-            } else {
-                // 连接已失效，销毁
-                destroyConnection(conn);
-                continue;
             }
+            destroyConnection(conn);
+            continue;
         }
-        
+
         // 2. 尝试创建新连接
-        size_t total = total_connections_.load();
+        const size_t total = total_connections_.load();
         if (total < max_connections_) {
             lock.unlock();
             auto conn = createConnection();
+            lock.lock();
+            if (closed_) {
+                if (conn) {
+                    destroyConnection(conn);
+                }
+                return nullptr;
+            }
             if (conn) {
-                lock.lock();
+                // 并发创建可能短暂超过 max；销毁多余连接，保证上限
+                if (total_connections_.load() > max_connections_) {
+                    destroyConnection(conn);
+                    continue;
+                }
                 conn->setState(Connection::State::IN_USE);
                 busy_connections_.fetch_add(1);
                 return conn;
             }
-            lock.lock();
             continue;
         }
-        
-        // 3. 等待空闲连接
-        auto remaining = deadline - std::chrono::steady_clock::now();
-        if (remaining <= std::chrono::milliseconds(0)) {
-            // 超时
+
+        // 3. 等待空闲连接或关闭
+        if (std::chrono::steady_clock::now() >= deadline) {
             total_requests_.fetch_add(1);
             LOG_WARN("Connection pool timeout");
             return nullptr;
         }
-        
-        // 等待条件变量
-        cv_.wait_for(lock, remaining);
+
+        cv_.wait_until(lock, deadline, [this] {
+            return closed_ || !idle_queue_.empty();
+        });
     }
 }
 
@@ -117,22 +127,23 @@ void ConnectionPool::returnConnection(ConnectionPtr conn) {
     if (!conn) {
         return;
     }
-    
+
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     busy_connections_.fetch_sub(1);
-    
-    // 检查连接是否有效
+
+    if (closed_) {
+        destroyConnection(conn);
+        return;
+    }
+
     if (conn->isConnected()) {
         conn->setState(Connection::State::IDLE);
         idle_connections_.fetch_add(1);
         idle_queue_.push(conn);
         conn->updateActiveTime();
-        
-        // 唤醒等待的获取者
         cv_.notify_one();
     } else {
-        // 连接已失效，销毁
         destroyConnection(conn);
     }
 }
@@ -141,10 +152,10 @@ void ConnectionPool::removeConnection(ConnectionPtr conn) {
     if (!conn) {
         return;
     }
-    
+
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    // 从空闲队列中移除
+
+    bool found_in_idle = false;
     std::queue<ConnectionPtr> new_queue;
     while (!idle_queue_.empty()) {
         auto c = idle_queue_.front();
@@ -152,15 +163,16 @@ void ConnectionPool::removeConnection(ConnectionPtr conn) {
         if (c != conn) {
             new_queue.push(c);
         } else {
+            found_in_idle = true;
             idle_connections_.fetch_sub(1);
             destroyConnection(c);
         }
     }
     idle_queue_ = std::move(new_queue);
-    
-    // 如果仍在使用中，标记为已关闭
-    if (conn->state() != Connection::State::CLOSED) {
-        conn->close();
+
+    if (!found_in_idle) {
+        busy_connections_.fetch_sub(1);
+        destroyConnection(conn);
     }
 }
 

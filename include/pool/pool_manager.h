@@ -2,6 +2,7 @@
 #define DB_PROXY_POOL_MANAGER_H
 
 #include "pool/connection_pool.h"
+#include <chrono>
 #include <unordered_map>
 #include <string>
 #include <memory>
@@ -29,7 +30,9 @@ public:
                  const std::string& database,
                  size_t min_connections = 5,
                  size_t max_connections = 50,
-                 BackendProtocol protocol = BackendProtocol::MySQL);
+                 BackendProtocol protocol = BackendProtocol::MySQL,
+                 std::chrono::milliseconds max_idle_time = std::chrono::milliseconds(30000),
+                 std::chrono::milliseconds connection_timeout = std::chrono::milliseconds(5000));
     
     // 获取连接池
     std::shared_ptr<ConnectionPool> getPool(const std::string& name);

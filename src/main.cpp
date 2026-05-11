@@ -259,7 +259,10 @@ int main(int argc, char* argv[]) {
         primary_db.password,
         primary_db.database,
         static_cast<size_t>(config.pool.min_connections),
-        static_cast<size_t>(config.pool.max_connections)
+        static_cast<size_t>(config.pool.max_connections),
+        BackendProtocol::MySQL,
+        std::chrono::milliseconds(config.pool.max_idle_time_ms),
+        std::chrono::milliseconds(config.pool.connection_timeout_ms)
     );
     if (!pool_ok) {
         LOG_ERROR("Failed to create connection pool for {}:{}/{}",
