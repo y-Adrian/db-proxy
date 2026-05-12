@@ -15,7 +15,7 @@ namespace diagnostics {
  * 零外部依赖：使用 POSIX socket 直接发送 HTTP 请求，解析 JSON 响应。
  *
  * 使用方式：
- *   auto provider = std::make_unique<OllamaProvider>("http://localhost:11434", "qwen3:14b");
+ *   auto provider = std::make_unique<OllamaProvider>("http://localhost:11434", "qwen2.5-coder:7b");
  *   DiagnosticEngine engine(std::move(provider));
  *
  * 面试亮点：
@@ -29,11 +29,11 @@ public:
     /**
      * @brief 构造 Ollama 提供者
      * @param base_url Ollama 服务地址，默认 http://localhost:11434
-     * @param model 模型名称，默认 qwen3:14b
+     * @param model 模型名称，默认 qwen2.5-coder:7b
      * @param timeout_seconds HTTP 请求超时（秒），默认 120
      */
     explicit OllamaProvider(const std::string& base_url = "http://localhost:11434",
-                            const std::string& model = "qwen3:14b",
+                            const std::string& model = "qwen2.5-coder:7b",
                             int timeout_seconds = 120);
 
     std::optional<DiagnosticResult> diagnose(const std::string& prompt) override;

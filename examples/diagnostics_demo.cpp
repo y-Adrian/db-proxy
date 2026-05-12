@@ -41,7 +41,7 @@ void printUsage(const char* prog) {
     std::cout << "  ollama     使用 Ollama 本地大模型\n\n";
     std::cout << "选项（仅 ollama 模式）:\n";
     std::cout << "  --url URL        Ollama 服务地址 (默认 http://localhost:11434)\n";
-    std::cout << "  --model MODEL    模型名称 (默认 qwen3:14b)\n";
+    std::cout << "  --model MODEL    模型名称 (默认 qwen2.5-coder:7b)\n";
     std::cout << "  --timeout SEC    请求超时秒数 (默认 120)\n\n";
     std::cout << "示例:\n";
     std::cout << "  " << prog << " mock\n";
@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
     // 解析命令行参数
     std::string mode = "mock";
     std::string ollama_url = "http://localhost:11434";
-    std::string ollama_model = "qwen3:14b";
+    std::string ollama_model = "qwen2.5-coder:7b";
     int timeout = 120;
 
     if (argc > 1) {
