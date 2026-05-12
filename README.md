@@ -2,7 +2,8 @@
 
 基于 C++20 的数据库连接池与 TCP 代理组件库；主程序 `db-proxy` 对客户端提供 **MySQL / PostgreSQL 原生线协议** 的透明端口转发，并与连接池集成以做预热、健康检查与**并发会话数**约束。
 
-产品与技术演进路线（四阶段、里程碑粒度）见 **[ROADMAP.md](ROADMAP.md)**。
+产品与技术演进路线（四阶段、里程碑粒度）见 **[ROADMAP.md](ROADMAP.md)**。  
+新人从零上手与推荐阅读顺序见 **[docs/LEARNING.md](docs/LEARNING.md)**。
 
 ---
 
