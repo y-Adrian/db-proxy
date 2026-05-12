@@ -47,6 +47,8 @@ Config defaultConfig() {
     cfg.monitoring.metrics_interval_ms   = 1000;
     cfg.monitoring.slow_query_threshold_ms = 100;
     cfg.monitoring.enable_query_logging  = false;
+    cfg.monitoring.metrics_host            = "127.0.0.1";
+    cfg.monitoring.metrics_port            = 0;
 
     cfg.log_level = "INFO";
     cfg.log_file  = "./logs/proxy.log";
@@ -164,6 +166,9 @@ Config loadConfig(const std::string& config_file) {
             else if (key == "metrics_interval_ms")       cfg.monitoring.metrics_interval_ms = std::stoi(value);
             else if (key == "slow_query_threshold_ms")   cfg.monitoring.slow_query_threshold_ms = std::stoi(value);
             else if (key == "enable_query_logging")      cfg.monitoring.enable_query_logging = (value == "true" || value == "1");
+            else if (key == "metrics_host" || key == "metrics_bind" || key == "metrics_listen")
+                cfg.monitoring.metrics_host = value;
+            else if (key == "metrics_port")              cfg.monitoring.metrics_port = static_cast<uint16_t>(std::stoi(value));
         }
         // ---- [log] ----
         else if (section == "log") {

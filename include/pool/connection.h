@@ -14,7 +14,9 @@ namespace dbproxy {
 /**
  * @brief MySQL 后端连接（握手、ping、简单查询与原始收发）
  *
- * 套接字在池内操作为非阻塞 + `select` 等待；`enterRawWireRelayMode` 将会话侧切为阻塞以便与透明中继配合。
+ * 认证：`mysql_native_password`（内置 SHA-1）；`caching_sha2_password`（内置 SHA-256 SCRAMBLE + 可选 RSA-OAEP
+ * 完整认证，完整认证需编译时定义 `DBPROXY_HAVE_OPENSSL` 并链接 OpenSSL）。
+ * 套接字在池内为非阻塞 + `select`；`enterRawWireRelayMode` 将会话侧切为阻塞以便与透明中继配合。
  */
 class Connection : public BackendConnection, public std::enable_shared_from_this<Connection> {
 public:

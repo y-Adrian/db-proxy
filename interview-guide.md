@@ -322,7 +322,7 @@ PostgreSQL 使用基于消息的协议，特点：
 | 特性 | MySQL | PostgreSQL |
 |------|-------|------------|
 | 默认端口 | 3306 | 5432 |
-| 认证协议 | SHA256 | SCRAM/md5 |
+| 常见认证 | `mysql_native_password` / `caching_sha2_password` 等 | SCRAM-SHA-256 / md5 等 |
 | 整数编码 | LENENC | 固定 2/4/8 字节 |
 | 字符串编码 | 字节码 | 始终 UTF-8 |
 | 预处理语句 | `?` 占位符 | `$1, $2...` |

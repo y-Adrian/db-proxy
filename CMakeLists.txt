@@ -7,8 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
 
-# OpenSSL 用于 PostgreSQL SCRAM/MD5、MySQL caching_sha2 等高级认证。
-# 为了在最小环境也能编译（先打通 MySQL mysql_native_password），这里把 OpenSSL 设为可选。
+# OpenSSL：PostgreSQL 的 SCRAM-SHA-256 / MD5 等；MySQL caching_sha2_password 在需 RSA 公钥时的完整认证（见 connection.cpp）。
+# 未找到 OpenSSL 时仍可编译：PostgreSQL 池驱动会关闭；MySQL 仍支持 mysql_native_password；caching_sha2 在服务端不要求 RSA 完整认证时也可用。
 option(DBPROXY_ENABLE_POSTGRES "Enable PostgreSQL backend connection implementation" ON)
 find_package(OpenSSL QUIET)
 if (NOT OpenSSL_FOUND AND DBPROXY_ENABLE_POSTGRES)
@@ -29,6 +29,7 @@ set(CORE_SOURCES
     src/core/logger.cpp
     src/core/config.cpp
     src/crypto/sha1.cpp
+    src/crypto/sha256.cpp
 )
 
 set(NETWORK_SOURCES
@@ -62,6 +63,7 @@ set(MONITOR_SOURCES
     src/monitor/metrics.cpp
     src/monitor/statistics.cpp
     src/monitor/performance_analyzer.cpp
+    src/monitor/metrics_http_server.cpp
 )
 
 set(DIAGNOSTICS_SOURCES
@@ -101,6 +103,14 @@ add_executable(test_pooled_session_relay
 )
 add_test(NAME PooledSessionRelayTest COMMAND test_pooled_session_relay)
 target_link_libraries(test_pooled_session_relay PRIVATE Threads::Threads)
+
+add_executable(test_monitor_integration
+    tests/test_monitor_integration.cpp
+    ${MONITOR_SOURCES}
+    ${CORE_SOURCES}
+)
+add_test(NAME MonitorIntegrationTest COMMAND test_monitor_integration)
+target_link_libraries(test_monitor_integration PRIVATE Threads::Threads)
 
 # 性能测试
 add_executable(bench_pool benchmarks/bench_connection_pool.cpp ${POOL_SOURCES} ${CORE_SOURCES})
@@ -142,9 +152,11 @@ if (OpenSSL_FOUND)
     foreach(t db-proxy dbcli examples stress_test test_pool test_pooled_session_relay bench_pool diagnostics_demo)
         if (TARGET ${t})
             target_link_libraries(${t} PRIVATE OpenSSL::Crypto)
+            target_compile_definitions(${t} PRIVATE DBPROXY_HAVE_OPENSSL=1)
         endif()
     endforeach()
     if (TARGET examples_pg)
         target_link_libraries(examples_pg PRIVATE OpenSSL::Crypto)
+        target_compile_definitions(examples_pg PRIVATE DBPROXY_HAVE_OPENSSL=1)
     endif()
 endif()

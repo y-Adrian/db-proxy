@@ -12,7 +12,7 @@
 | 每客户端会话 | 固定大小 **工作线程池**：从 `PoolManager` **借出一条池内连接**，对该连接执行 `COM_QUIT` / `Terminate` 后，再与后端建立**裸 TCP**，在客户端与该 TCP 之间做 **阻塞 `poll` + `recv`/`send` 双向字节透传**；会话结束后 **重新握手** 并归还连接池。 |
 | 「连接复用」含义 | **不是**把「已握手的数据库连接」直接转给多个客户端复用（线协议不允许）。池化用于：**限制同时透传的会话数**（与 `[pool] max_connections` 一致）、**预热与健康检查**；每条客户端会话在后端仍为**独立线协议会话**（先裸 TCP再完整握手）。 |
 | 协议解析 | 主路径**不做** SQL/报文级解析；`include/protocol/`、`mysql_relay` 等供 **examples / dbcli / 测试** 或后续扩展使用。 |
-| 监控 | `Metrics` 提供 **Prometheus 文本格式**（`toPrometheusFormat()`）；主程序当前主要更新连接类计数，**无内置 HTTP `/metrics` 拉取端点**；`[monitor]` 中部分键已解析，**尚未**全部接入主循环。 |
+| 监控 | `[monitor] enable` 控制统计日志与 `PerformanceAnalyzer` 快照；`metrics_interval_ms` 控制周期；`metrics_port>0` 时提供 **HTTP `GET /metrics`**（Prometheus 文本）；`slow_query_threshold_ms` / `enable_query_logging` 作用于**代理会话时长**（非 SQL）。 |
 
 以下「核心价值」中关于**应用直连连接池**（不经代理字节透传）的描述，仍适用于 `examples`、`dbcli`、`ConnectionPool` 等库用法。
 
@@ -112,7 +112,7 @@ Client ──线协议──► DB-Proxy (accept: epoll/select)
 | 网络 | Linux: **epoll ET + 非阻塞 accept**；会话内阻塞 `poll` 透传；非 Linux: **select** 回退 |
 | 数据库 | MySQL / PostgreSQL **线协议**（代理透传 + 库内协议栈） |
 | 并发 | 工作线程池、`std::jthread` 后台健康/统计、原子与互斥 |
-| 监控 | `Metrics`：**Prometheus 文本** API；主程序为轻量计数，**无内置 scrape HTTP** |
+| 监控 | `Metrics`（Prometheus 文本 + 可选 `/metrics` HTTP）、`Statistics` 会话级 QPS、周期池 Gauge 同步 |
 
 ## 核心模块
 
@@ -123,7 +123,7 @@ db-proxy/
 │   ├── network/       # epoll/select 监听与 TcpConnection
 │   ├── protocol/      # 透明中继、MySQL 包/中继（主程序透传；解析供示例与扩展）
 │   ├── pool/          # 连接池与后端连接封装
-│   └── monitor/       # Metrics / Statistics（主程序部分接入）
+│   └── monitor/       # Metrics、Statistics、HTTP /metrics、PerformanceAnalyzer
 └── src/
     ├── main.cpp       # 主程序：池化槽位 + 工作线程 + 透明会话中继
     └── ...
@@ -148,6 +148,7 @@ cd ..
 #   build/examples_pg              PostgreSQL 场景化用例（可选 OpenSSL）
 #   build/test_pool                连接池集成测试（需本地 MySQL）
 #   build/test_pooled_session_relay  中继单元测试（仅本机，无需数据库）
+#   build/test_monitor_integration   监控 /metrics、Statistics、配置解析集成测试（仅本机）
 #   build/bench_pool               性能测试
 #   build/stress_test              压力测试
 #   build/dbcli                    CLI 工具
@@ -171,7 +172,23 @@ cd build
 ./test_pooled_session_relay
 ctest -R PooledSessionRelay --output-on-failure
 
-# 全部 CTest（含 test_pool，需本机 MySQL 才可能通过）
+# 连接池集成测试 `test_pool`：默认跳过；需本机数据库且显式开启其一
+#   MySQL：  DBPROXY_TEST_MYSQL=1 ./test_pool
+#   PostgreSQL（需 OpenSSL 构建）：  DBPROXY_TEST_PG=1 PGHOST=127.0.0.1 PGPORT=5432 PGUSER=… ./test_pool
+# 或一键脚本（含建表/编译/场景用例/同方式 test_pool）：
+#   ./test_with_mysql.sh
+#   ./test_with_pg.sh
+# 上述脚本在跑完 `examples` / `examples_pg` 后，会以与 MySQL 相同方式执行 `DBPROXY_TEST_*=1 ./test_pool`。
+# 手动池测示例（在已启动对应数据库的前提下）：
+#   DBPROXY_TEST_MYSQL=1 ./test_pool
+#   DBPROXY_TEST_PG=1 ./test_pool   # 使用 PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE
+ctest -R PoolTest --output-on-failure
+
+# 监控模块集成测试（HTTP /metrics、Statistics、[monitor] 配置）
+./test_monitor_integration
+ctest -R MonitorIntegration --output-on-failure
+
+# 全部 CTest（`test_pool` 默认跳过；若未设置 DBPROXY_TEST_* 则仍为通过）
 ctest --output-on-failure
 ```
 
@@ -182,7 +199,8 @@ ctest --output-on-failure
 | `[server] max_connections`、`backlog` | 已由 `loadConfig` 解析，**监听与 accept 路径尚未使用**（见 `EpollServer::listen`）。 |
 | `[pool] max_connections` | **已使用**：与主程序并发透传会话数一致（池借出即占用槽位）。 |
 | `[pool] connection_timeout_ms` | **已使用**：`getConnection` 等待空闲槽位的超时。 |
-| `[monitor]`* | 已解析；**主程序未**按间隔暴露 Prometheus HTTP 或慢查询日志（透传路径无 SQL 解析）。 |
+| `[monitor]`* | `enable`：总开关；`metrics_interval_ms`：统计日志与池 Gauge 同步周期；`metrics_host` / `metrics_port`：`metrics_port>0` 时监听并暴露 `GET /metrics`；`slow_query_threshold_ms` / `enable_query_logging`：按**会话持续时间**记慢会话与会话日志（透传路径无 SQL）。 |
+| `[database] protocol` | `mysql`（默认）或 `postgresql` / `postgres` / `pg`。PostgreSQL 池与 SCRAM 等认证依赖 **OpenSSL** 构建；MySQL `caching_sha2_password` 的 RSA 完整认证同样依赖 OpenSSL。 |
 
 ---
 
@@ -191,6 +209,8 @@ ctest --output-on-failure
 项目提供两个测试脚本，均支持 **local**（连接本地数据库）和 **docker**（容器化）两种模式，编译产物统一输出到 `build/` 目录。
 
 ### PostgreSQL 测试
+
+构建阶段需 **CMake 找到 OpenSSL** 且未关闭 `DBPROXY_ENABLE_POSTGRES`，才会生成 `examples_pg` 与池内的 `PostgreSQLConnection`；运行时与 MySQL 类似，在 `proxy.conf` 的 `[database]` 中把 `protocol` 设为 `postgresql`（或 `postgres` / `pg`）并指向可达的 PG 实例。认证侧实现支持 trust、明文密码、MD5 与 **SCRAM-SHA-256**（见 `src/pool/postgresql_connection.cpp`）。
 
 ```bash
 # 默认 local 模式，连接本地 PostgreSQL
@@ -206,6 +226,8 @@ ctest --output-on-failure
 ./test_with_pg.sh restart  # 重启 Docker 容器
 ./test_with_pg.sh test     # 仅测试连接
 ```
+
+与 MySQL 脚本对称：成功检测数据库并编译后，会在 `build/` 下依次运行 **`./examples_pg`** 与 **`DBPROXY_TEST_PG=1 ./test_pool`**（后者使用 `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` 与 `tests/test_connection_pool.cpp` 中的 PG 池逻辑）。
 
 **local 模式环境变量**（可选，均有默认值）：
 
@@ -232,6 +254,8 @@ ctest --output-on-failure
 # 停止 Docker 容器
 ./test_with_mysql.sh stop
 ```
+
+流程与 PG 对称：检测/启动 MySQL → 建表 → 编译 → 运行 **`./examples`**，再运行 **`DBPROXY_TEST_MYSQL=1 ./test_pool`**（固定 `127.0.0.1:3306` / `root` / 空密码 / `test`，与 `tests/test_connection_pool.cpp` 中 MySQL 分支一致）。可选 `--also-pg` 再跑 `examples_pg`。
 
 **local 模式环境变量**（可选，均有默认值）：
 
@@ -275,7 +299,6 @@ cd build && ./examples_pg
 - 事务处理
 - 连接参数配置
 - LISTEN/NOTIFY 机制（PG）
-- COPY 批量导入（PG）
 - 健康检查
 - 多数据库管理
 - 性能监控

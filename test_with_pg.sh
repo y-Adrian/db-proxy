@@ -6,7 +6,7 @@
 #   --mode docker  通过 Docker Compose 启动 PostgreSQL 容器
 #
 # 用法：
-#   ./test_with_pg.sh                     # 默认 local 模式
+#   ./test_with_pg.sh                     # 默认 local：检测 PG → 建表 → 编译 → examples_pg + test_pool(PG)
 #   ./test_with_pg.sh --mode docker       # Docker 模式
 #   ./test_with_pg.sh --mode local        # 显式 local 模式
 #   ./test_with_pg.sh start               # 等同于 --mode local（兼容旧用法）
@@ -291,6 +291,17 @@ run_tests() {
         echo -e "========================================${NC}"
         ./examples_pg || true
     fi
+
+    # 连接池集成测试（需 DBPROXY_TEST_PG=1；本脚本已确认 PostgreSQL 可达）
+    if [[ -f ./test_pool ]]; then
+        echo ""
+        echo -e "${CYAN}========================================"
+        echo "   PostgreSQL 连接池集成测试 (test_pool)"
+        echo -e "========================================${NC}"
+        export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
+        DBPROXY_TEST_PG=1 ./test_pool || true
+    fi
+
     cd ..
 }
 

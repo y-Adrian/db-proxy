@@ -18,7 +18,7 @@ namespace dbproxy {
  * @brief 指标收集器
  *
  * - 计数器、Gauge、直方图；可导出 **Prometheus 文本**（`toPrometheusFormat()`）。
- * - 主程序 `db-proxy` 仅部分更新指标；**无**内置 HTTP scrape 端点，需由调用方拉取或落盘。
+ * - 主程序 `db-proxy` 在 `[monitor] metrics_port>0` 时提供 HTTP `GET /metrics`；亦可由其它代码调用本类。
  */
 class Metrics {
 public:

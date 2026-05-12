@@ -71,6 +71,32 @@ void Statistics::recordQuery(const std::string& sql, const std::string& type,
     }
 }
 
+void Statistics::recordRelaySessionEnd(const std::string& client_ip, uint64_t duration_ms,
+                                      uint64_t slow_session_threshold_ms) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_window_time_).count();
+
+    if (elapsed >= 1) {
+        current_window_ = (current_window_ + 1) % WINDOW_SIZE;
+        time_windows_[current_window_] = TimeWindow{};
+        last_window_time_ = now;
+    }
+
+    time_windows_[current_window_].queries++;
+    total_queries_++;
+    time_windows_[current_window_].reads++;
+
+    if (slow_session_threshold_ms > 0 && duration_ms >= slow_session_threshold_ms) {
+        slow_queries_++;
+    }
+
+    client_stats_[client_ip]++;
+    total_connections_++;
+}
+
 std::vector<Statistics::SQLStats> Statistics::getSlowQueries(size_t limit) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     

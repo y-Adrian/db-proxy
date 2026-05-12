@@ -6,7 +6,7 @@
 
 namespace dbproxy {
 
-/** PostgreSQL 后端连接；池内为非阻塞 IO，`enterRawWireRelayMode` 切阻塞供透明中继。 */
+/** PostgreSQL 后端连接；认证支持 trust / 明文 / MD5 / SCRAM-SHA-256（实现依赖 OpenSSL）。池内非阻塞 IO，`enterRawWireRelayMode` 切阻塞供透明中继。 */
 class PostgreSQLConnection : public BackendConnection,
                              public std::enable_shared_from_this<PostgreSQLConnection> {
 public:

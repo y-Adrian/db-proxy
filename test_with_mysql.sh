@@ -6,7 +6,7 @@
 #   --mode docker  通过 Docker 启动 MySQL 容器
 #
 # 用法：
-#   ./test_with_mysql.sh                  # 默认 local 模式，仅 MySQL 场景化用例
+#   ./test_with_mysql.sh                  # 默认 local 模式：检测 MySQL → 建表 → 编译 → examples + test_pool(MySQL)
 #   ./test_with_mysql.sh --mode docker    # Docker 模式
 #   ./test_with_mysql.sh --mode local     # 显式 local 模式
 #   ./test_with_mysql.sh --also-pg        # 在 MySQL 用例之后额外跑 PG 用例（需本机 PG）
@@ -63,6 +63,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --mode local    连接本地 MySQL（默认）"
             echo "  --mode docker   通过 Docker 启动 MySQL"
             echo "  --also-pg       MySQL 用例后再运行 PostgreSQL 场景化用例（可选）"
+            echo "                  （连接池集成测试 test_pool 在 MySQL 用例后始终以 DBPROXY_TEST_MYSQL=1 运行）"
             echo "  stop            停止 Docker 容器"
             echo "  -h, --help      显示帮助"
             echo ""
@@ -256,6 +257,15 @@ run_tests() {
         echo "   PostgreSQL 场景化用例（--also-pg）"
         echo -e "========================================${NC}"
         ./examples_pg || true
+    fi
+
+    # 连接池集成测试（需 DBPROXY_TEST_MYSQL=1；本脚本已确认 MySQL 可达）
+    if [[ -f ./test_pool ]]; then
+        echo ""
+        echo -e "${CYAN}========================================"
+        echo "   MySQL 连接池集成测试 (test_pool)"
+        echo -e "========================================${NC}"
+        DBPROXY_TEST_MYSQL=1 ./test_pool || true
     fi
 
     cd ..

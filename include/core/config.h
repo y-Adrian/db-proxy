@@ -36,17 +36,23 @@ struct DatabaseConfig {
     std::string password;
     std::string database;
     std::string charset = "utf8mb4";
-    /** 线协议：mysql（默认）| postgresql | postgres | pg（连接池与透明代理均按此选择后端） */
     /** 线协议：mysql（默认）| postgresql | postgres | pg（池内握手；主程序对该后端字节透传） */
     std::string protocol = "mysql";
 };
 
-/** 监控段：已由 loadConfig 解析；主程序尚未全部消费（无内置 /metrics HTTP） */
+/** 监控：`enable` 总开关；`metrics_port>0` 时在本机提供 GET /metrics（Prometheus 文本） */
 struct MonitoringConfig {
     bool enable = true;
+    /** 统计日志与池指标同步间隔（毫秒） */
     int metrics_interval_ms = 1000;
+    /** 透明代理下表示「单条客户端会话持续时间」阈值（毫秒），超过记慢会话 WARN */
     int slow_query_threshold_ms = 100;
+    /** 为 true 时每个代理会话结束打一条 INFO（无 SQL 文本） */
     bool enable_query_logging = false;
+    /** 绑定 Prometheus /metrics 的地址；metrics_port=0 时不监听 */
+    std::string metrics_host = "127.0.0.1";
+    /** 0 表示关闭 HTTP 指标；例如 19100 */
+    uint16_t metrics_port = 0;
 };
 
 struct Config {

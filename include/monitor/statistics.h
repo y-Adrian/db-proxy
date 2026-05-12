@@ -37,6 +37,10 @@ public:
     
     void recordQuery(const std::string& sql, const std::string& type,
                      const std::string& database, uint64_t latency_ms);
+
+    /** 透明代理：会话结束（无 SQL）；参与 QPS 窗口与慢会话（按 duration）统计 */
+    void recordRelaySessionEnd(const std::string& client_ip, uint64_t duration_ms,
+                               uint64_t slow_session_threshold_ms);
     
     // 获取 Top N 慢查询
     std::vector<SQLStats> getSlowQueries(size_t limit = 10) const;

@@ -11,6 +11,14 @@
 #include <algorithm>
 
 #include "crypto/sha1.h"
+#include "crypto/sha256.h"
+
+#if defined(DBPROXY_HAVE_OPENSSL)
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#endif
 
 namespace dbproxy {
 
@@ -123,6 +131,110 @@ bool isEOFPacket(const std::string& payload) {
            static_cast<uint8_t>(payload[0]) == 0xfe &&
            payload.size() < 9;
 }
+
+constexpr uint8_t kMysqlAuthMoreData = 0x01;
+constexpr uint8_t kCachingSha2RequestPublicKey = 2;
+constexpr uint8_t kCachingSha2FastAuthSuccess = 3;
+constexpr uint8_t kCachingSha2PerformFullAuth = 4;
+
+std::string makeCachingSha2Scramble(const std::string& scramble, const std::string& password) {
+    if (password.empty()) {
+        return "";
+    }
+    std::string m1 = crypto::sha256(password);
+    const std::string m1h = crypto::sha256(m1);
+    const std::string m2 = crypto::sha256(m1h + scramble);
+    for (std::size_t i = 0; i < crypto::kSha256DigestLength; ++i) {
+        m1[i] = static_cast<char>(static_cast<unsigned char>(m1[i]) ^
+                                  static_cast<unsigned char>(m2[i]));
+    }
+    return m1;
+}
+
+#if defined(DBPROXY_HAVE_OPENSSL)
+
+EVP_PKEY* loadMysqlRsaPublicKeyFromPem(const std::string& pem) {
+    BIO* bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
+    if (!bio) {
+        return nullptr;
+    }
+    EVP_PKEY* pkey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    return pkey;
+}
+
+bool rsaOaepSha1EncryptMysqlCachingSha2(EVP_PKEY* pkey, const std::string& password,
+                                        const std::string& scramble, std::string& out,
+                                        std::string& err_out) {
+    std::string plain(password.size() + 1, '\0');
+    if (!password.empty()) {
+        memcpy(plain.data(), password.data(), password.size());
+    }
+    if (!scramble.empty()) {
+        for (size_t i = 0; i < plain.size(); ++i) {
+            plain[i] ^= scramble[i % scramble.size()];
+        }
+    }
+
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(pkey, nullptr);
+    if (!ctx) {
+        err_out = "EVP_PKEY_CTX_new failed";
+        return false;
+    }
+    bool ok = false;
+    do {
+        if (EVP_PKEY_encrypt_init(ctx) <= 0) {
+            break;
+        }
+        if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
+            break;
+        }
+        if (EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, EVP_sha1()) <= 0) {
+            break;
+        }
+        if (EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha1()) <= 0) {
+            break;
+        }
+
+        size_t outlen = 0;
+        if (EVP_PKEY_encrypt(ctx, nullptr, &outlen,
+                              reinterpret_cast<const unsigned char*>(plain.data()),
+                              plain.size()) <= 0) {
+            break;
+        }
+        out.assign(outlen, '\0');
+        if (EVP_PKEY_encrypt(ctx, reinterpret_cast<unsigned char*>(out.data()), &outlen,
+                              reinterpret_cast<const unsigned char*>(plain.data()),
+                              plain.size()) <= 0) {
+            break;
+        }
+        out.resize(outlen);
+        ok = true;
+    } while (false);
+
+    if (!ok) {
+        err_out.clear();
+        for (;;) {
+            unsigned long e = ERR_get_error();
+            if (e == 0) {
+                break;
+            }
+            char buf[256];
+            ERR_error_string_n(e, buf, sizeof(buf));
+            if (!err_out.empty()) {
+                err_out += "; ";
+            }
+            err_out += buf;
+        }
+        if (err_out.empty()) {
+            err_out = "EVP_PKEY_encrypt failed";
+        }
+    }
+    EVP_PKEY_CTX_free(ctx);
+    return ok;
+}
+
+#endif  // DBPROXY_HAVE_OPENSSL
 
 }  // namespace
 
@@ -247,7 +359,8 @@ bool Connection::restoreSessionAfterRawRelay() {
 
 bool Connection::doHandshake() {
     std::string handshake;
-    if (!readPacket(handshake)) {
+    uint8_t srv_seq = 0;
+    if (!readPacket(handshake, &srv_seq)) {
         last_error_ = "Failed to read handshake packet";
         return false;
     }
@@ -292,14 +405,10 @@ bool Connection::doHandshake() {
         auth_plugin_name = "mysql_native_password";
     }
 
-    // 当前实现仅支持 mysql_native_password（SHA-1）。
-    // 若后端使用 caching_sha2_password，请在 MySQL 配置中切换到 mysql_native_password。
-    if (auth_plugin_name == "caching_sha2_password") {
-        last_error_ = "Backend auth plugin caching_sha2_password is not supported without OpenSSL. "
-                      "Please use mysql_native_password.";
-        return false;
-    }
-    std::string auth_response = makeAuthResponse(scramble, password_);
+    const std::string auth_response =
+        (auth_plugin_name == "caching_sha2_password")
+            ? makeCachingSha2Scramble(scramble, password_)
+            : makeAuthResponse(scramble, password_);
 
     uint32_t client_capabilities =
         CLIENT_LONG_PASSWORD |
@@ -333,14 +442,13 @@ bool Connection::doHandshake() {
     auth_payload.append(auth_plugin_name);
     auth_payload.push_back('\0');
 
-    if (!writePacket(auth_payload, 1)) {
+    if (!writePacket(auth_payload, static_cast<uint8_t>(srv_seq + 1))) {
         last_error_ = "Failed to send auth packet";
         return false;
     }
 
     std::string response;
-    uint8_t seq = 0;
-    if (!readPacket(response, &seq) || response.empty()) {
+    if (!readPacket(response, &srv_seq) || response.empty()) {
         last_error_ = "Failed to read auth response";
         return false;
     }
@@ -356,15 +464,78 @@ bool Connection::doHandshake() {
         last_error_ = "MySQL auth error " + std::to_string(error_code) + ": " + msg;
         return false;
     }
-    if (type == 0x01 && auth_plugin_name == "caching_sha2_password") {
-        if (response.size() >= 2 && static_cast<uint8_t>(response[1]) == 0x03) {
+    if (type == kMysqlAuthMoreData && auth_plugin_name == "caching_sha2_password") {
+        if (response.size() < 2) {
+            last_error_ = "Malformed caching_sha2 AuthMoreData packet";
+            return false;
+        }
+        const uint8_t sub = static_cast<uint8_t>(response[1]);
+        if (sub == kCachingSha2FastAuthSuccess) {
             std::string ok;
-            if (readPacket(ok) && !ok.empty() && static_cast<uint8_t>(ok[0]) == 0x00) {
+            if (readPacket(ok, &srv_seq) && !ok.empty() && static_cast<uint8_t>(ok[0]) == 0x00) {
                 LOG_DEBUG("MySQL caching_sha2 fast authentication successful");
                 return true;
             }
+            last_error_ = "Expected OK after caching_sha2 fast auth";
+            return false;
         }
-        last_error_ = "caching_sha2 full authentication requires TLS/RSA";
+        if (sub == kCachingSha2PerformFullAuth) {
+#if !defined(DBPROXY_HAVE_OPENSSL)
+            last_error_ =
+                "caching_sha2_password full authentication requires OpenSSL; install OpenSSL and "
+                "rebuild (e.g. cmake -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) ..)";
+            return false;
+#else
+            std::string req(1, static_cast<char>(kCachingSha2RequestPublicKey));
+            if (!writePacket(req, static_cast<uint8_t>(srv_seq + 1))) {
+                last_error_ = "Failed to send caching_sha2 public key request";
+                return false;
+            }
+            std::string pem_pkt;
+            if (!readPacket(pem_pkt, &srv_seq) || pem_pkt.empty()) {
+                last_error_ = "Failed to read server RSA PEM";
+                return false;
+            }
+            if (static_cast<uint8_t>(pem_pkt[0]) != kMysqlAuthMoreData) {
+                last_error_ = "Expected AuthMoreData with RSA public key for caching_sha2";
+                return false;
+            }
+            const std::string pem_body = pem_pkt.substr(1);
+            EVP_PKEY* pkey = loadMysqlRsaPublicKeyFromPem(pem_body);
+            if (!pkey) {
+                last_error_ = "Failed to parse MySQL RSA public key PEM";
+                return false;
+            }
+            std::string cipher;
+            std::string rsa_err;
+            if (!rsaOaepSha1EncryptMysqlCachingSha2(pkey, password_, scramble, cipher, rsa_err)) {
+                EVP_PKEY_free(pkey);
+                last_error_ = rsa_err;
+                return false;
+            }
+            EVP_PKEY_free(pkey);
+            if (!writePacket(cipher, static_cast<uint8_t>(srv_seq + 1))) {
+                last_error_ = "Failed to send RSA-encrypted password";
+                return false;
+            }
+            std::string ok_fin;
+            if (!readPacket(ok_fin, &srv_seq) || ok_fin.empty() ||
+                static_cast<uint8_t>(ok_fin[0]) != 0x00) {
+                if (!ok_fin.empty() && static_cast<uint8_t>(ok_fin[0]) == 0xff) {
+                    const uint16_t ec = ok_fin.size() >= 3 ? readInt2(ok_fin, 1) : 0;
+                    last_error_ = "MySQL auth error after RSA step " + std::to_string(ec) + ": " +
+                                  (ok_fin.size() > 9 ? ok_fin.substr(9) : "");
+                } else {
+                    last_error_ = "Expected OK after caching_sha2 RSA authentication";
+                }
+                return false;
+            }
+            LOG_DEBUG("MySQL caching_sha2 full (RSA) authentication successful");
+            return true;
+#endif
+        }
+        last_error_ =
+            "Unsupported caching_sha2 AuthMoreData status: " + std::to_string(static_cast<int>(sub));
         return false;
     }
 
