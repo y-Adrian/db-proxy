@@ -10,6 +10,40 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <string>
+
+namespace {
+
+const char* getenv_nonempty(const char* name) {
+    const char* v = std::getenv(name);
+    return (v && v[0]) ? v : nullptr;
+}
+
+/** OLLAMA_HOST 可能是完整 URL 或 host:port；无 scheme 时补全为 http:// */
+std::string normalizeOllamaBaseUrl(std::string host_or_url) {
+    while (!host_or_url.empty() && (host_or_url.back() == ' ' || host_or_url.back() == '\t')) {
+        host_or_url.pop_back();
+    }
+    size_t i = 0;
+    while (i < host_or_url.size() && (host_or_url[i] == ' ' || host_or_url[i] == '\t')) {
+        ++i;
+    }
+    if (i > 0) {
+        host_or_url.erase(0, i);
+    }
+    if (host_or_url.empty()) {
+        return "http://localhost:11434";
+    }
+    if (host_or_url.size() >= 7 && host_or_url.compare(0, 7, "http://") == 0) {
+        return host_or_url;
+    }
+    if (host_or_url.size() >= 8 && host_or_url.compare(0, 8, "https://") == 0) {
+        return host_or_url;
+    }
+    return "http://" + host_or_url;
+}
+
+}  // namespace
 
 // 模拟一些运行时数据，用于演示诊断功能
 void simulateMetrics() {
@@ -43,6 +77,9 @@ void printUsage(const char* prog) {
     std::cout << "  --url URL        Ollama 服务地址 (默认 http://localhost:11434)\n";
     std::cout << "  --model MODEL    模型名称 (默认 qwen2.5-coder:7b)\n";
     std::cout << "  --timeout SEC    请求超时秒数 (默认 120)\n\n";
+    std::cout << "环境变量（在解析命令行之前生效；--url / --model 可覆盖）:\n";
+    std::cout << "  OLLAMA_HOST      基址，可为 http(s)://host:port 或 host:port\n";
+    std::cout << "  OLLAMA_MODEL     模型名\n\n";
     std::cout << "示例:\n";
     std::cout << "  " << prog << " mock\n";
     std::cout << "  " << prog << " ollama\n";
@@ -66,6 +103,13 @@ int main(int argc, char* argv[]) {
     std::string ollama_url = "http://localhost:11434";
     std::string ollama_model = "qwen2.5-coder:7b";
     int timeout = 120;
+
+    if (const char* h = getenv_nonempty("OLLAMA_HOST")) {
+        ollama_url = normalizeOllamaBaseUrl(std::string(h));
+    }
+    if (const char* m = getenv_nonempty("OLLAMA_MODEL")) {
+        ollama_model = m;
+    }
 
     if (argc > 1) {
         std::string arg1 = argv[1];
