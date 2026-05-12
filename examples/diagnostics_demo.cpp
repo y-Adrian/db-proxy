@@ -1,3 +1,4 @@
+#include "core/logger.h"
 #include "diagnostics/diagnostic_engine.h"
 #include "diagnostics/mock_provider.h"
 #include "diagnostics/ollama_provider.h"
@@ -49,6 +50,17 @@ void printUsage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
+    if (argc >= 2) {
+        std::string a = argv[1];
+        if (a == "--help" || a == "-h") {
+            printUsage(argv[0]);
+            return 0;
+        }
+    }
+
+    // 使 OllamaProvider 等模块的 LOG_* 输出到 stdout（空路径表示不写文件，仅控制台）
+    dbproxy::Logger::instance().init("", dbproxy::LogLevel::INFO);
+
     // 解析命令行参数
     std::string mode = "mock";
     std::string ollama_url = "http://localhost:11434";
@@ -57,10 +69,6 @@ int main(int argc, char* argv[]) {
 
     if (argc > 1) {
         std::string arg1 = argv[1];
-        if (arg1 == "--help" || arg1 == "-h") {
-            printUsage(argv[0]);
-            return 0;
-        }
         if (arg1 == "mock" || arg1 == "ollama") {
             mode = arg1;
         } else {
