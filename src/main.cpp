@@ -8,7 +8,7 @@
  * - **池化后端**：`PoolManager` 为每个数据库节注册 `ConnectionPool`；工作线程从池借出**已握手**的后端连接，
  *   与客户端会话做**透明双向字节透传**（`TransparentSessionRelay`），会话结束后 `restoreSessionAfterRawRelay`
  *   再归还池。
- * - **配置**：INI（`-c` / `--config` / `--config=`），见 `loadConfig` 与仓库根 `proxy.conf` 示例。
+ * - **配置**：INI（`-c` / `--config` / `--config=`），见 `loadConfig`；示例按后端分文件放在 `conf/`（`conf/proxy.mysql.conf`、`conf/proxy.postgresql.conf`）。未传 `-c` 时依次尝试 `conf/` 与 `../conf/` 下的 `proxy.mysql.conf` 以兼容 cwd 为仓库根或 `build/`。
  * - **监控**：`[monitor]` 控制统计日志、会话级 Metrics/Statistics、`PerformanceAnalyzer` 快照；`metrics_port>0`
  *   时可选 `MetricsHttpServer` 暴露 `GET /metrics`（Prometheus 文本）。
  *
@@ -48,6 +48,8 @@
 #include <condition_variable>
 #include <cctype>
 #include <csignal>
+#include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -66,6 +68,18 @@ bool isPostgresWireProtocol(const std::string& protocol) {
         return static_cast<char>(std::tolower(c));
     });
     return p == "postgresql" || p == "postgres" || p == "pg";
+}
+
+/** 默认 MySQL 示例配置：优先仓库根下的 conf/，其次 build/ 工作目录下的 ../conf/。 */
+std::string defaultMysqlConfigPath() {
+    constexpr const char* kCandidates[] = {"conf/proxy.mysql.conf", "../conf/proxy.mysql.conf"};
+    for (const char* p : kCandidates) {
+        std::ifstream f(p);
+        if (f.good()) {
+            return p;
+        }
+    }
+    return kCandidates[0];
 }
 
 }  // namespace
@@ -152,7 +166,7 @@ private:
 // ============================================================================
 int main(int argc, char* argv[]) {
     // ---- 配置文件路径（Fix-2） ----
-    std::string config_path = "proxy.conf";
+    std::string config_path = defaultMysqlConfigPath();
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         if ((arg == "-c" || arg == "--config") && i + 1 < argc) {
@@ -177,7 +191,7 @@ int main(int argc, char* argv[]) {
 
     // ---- 注册连接池 ----
     if (config.databases.empty()) {
-        LOG_ERROR("No database configured – check proxy.conf [database] section");
+        LOG_ERROR("No database configured – check conf/proxy.*.conf [database] section");
         return 1;
     }
 
@@ -189,11 +203,30 @@ int main(int argc, char* argv[]) {
     const BackendProtocol pool_proto =
         backend_is_pg ? BackendProtocol::PostgreSQL : BackendProtocol::MySQL;
 
+    std::string pool_user = primary_db.username;
+    if (backend_is_pg && pool_user.empty()) {
+        if (const char* u = std::getenv("USER")) {
+            pool_user = u;
+        }
+        if (pool_user.empty()) {
+            if (const char* u = std::getenv("USERNAME")) {
+                pool_user = u;
+            }
+        }
+        if (!pool_user.empty()) {
+            LOG_INFO("PostgreSQL pool user empty in config; using USER={}", pool_user);
+        }
+    }
+    if (backend_is_pg && pool_user.empty()) {
+        LOG_ERROR("PostgreSQL requires [database] user or USER/USERNAME environment variable");
+        return 1;
+    }
+
     bool pool_ok = PoolManager::instance().addPool(
         pool_name,
         primary_db.host,
         primary_db.port,
-        primary_db.username,
+        pool_user,
         primary_db.password,
         primary_db.database,
         static_cast<size_t>(config.pool.min_connections),
@@ -209,8 +242,8 @@ int main(int argc, char* argv[]) {
     }
     LOG_INFO("Backend wire protocol: {} (pooled backend + transparent wire relay per client)",
              backend_is_pg ? "PostgreSQL" : "MySQL");
-    LOG_INFO("Pool '{}' → {}:{}/{} (min={} max={})",
-             pool_name, primary_db.host, primary_db.port, primary_db.database,
+    LOG_INFO("Pool '{}' user={} → {}:{}/{} (min={} max={})",
+             pool_name, pool_user, primary_db.host, primary_db.port, primary_db.database,
              config.pool.min_connections, config.pool.max_connections);
 
     // ---- Fix-4: 工作线程池 ----

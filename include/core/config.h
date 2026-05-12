@@ -66,7 +66,7 @@ struct Config {
 
 // Load config from INI file; falls back to built-in defaults if file is
 // absent or unreadable.
-Config loadConfig(const std::string& config_file = "proxy.conf");
+Config loadConfig(const std::string& config_file = "conf/proxy.mysql.conf");
 
 }  // namespace dbproxy
 

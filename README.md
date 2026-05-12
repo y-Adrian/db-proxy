@@ -118,6 +118,7 @@ Client ──线协议──► DB-Proxy (accept: epoll/select)
 
 ```
 db-proxy/
+├── conf/              # 按后端拆分的示例 INI（MySQL / PostgreSQL）
 ├── include/
 │   ├── core/          # 配置、日志
 │   ├── network/       # epoll/select 监听与 TcpConnection
@@ -142,7 +143,9 @@ cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 cd ..
 
-# 编译完成后，所有二进制在 build/ 下：
+# 编译完成后，所有二进制在 build/ 下；示例配置在仓库根 conf/：
+#   conf/proxy.mysql.conf          MySQL 后端（代理默认 6033）
+#   conf/proxy.postgresql.conf     PostgreSQL 后端（代理默认 6432，与 MySQL 可同时跑）
 #   build/db-proxy                 主程序（池化 + 透明线协议代理）
 #   build/examples                 MySQL 场景化用例
 #   build/examples_pg              PostgreSQL 场景化用例（可选 OpenSSL）
@@ -160,9 +163,25 @@ cd ..
 ```bash
 cd build
 ./db-proxy
-# 或指定配置：
-# ./db-proxy -c /path/to/proxy.conf
+# 无 -c 时自动选用存在的 conf/proxy.mysql.conf（先试 ../conf/ 再试 conf/，适配 cwd 为 build/ 或仓库根）。
+# 显式切换后端：
+# ./db-proxy -c ../conf/proxy.mysql.conf
+# ./db-proxy -c ../conf/proxy.postgresql.conf
 ```
+
+### db-proxy 使用方式（MySQL / PostgreSQL）
+
+**在做什么**：每个 `db-proxy` 进程根据所选 INI **只连一种后端线协议**（`[database.primary]` 里的 `protocol`）。客户端仍使用**普通 MySQL 或 PostgreSQL 驱动**，把连接目标改成 **代理监听地址与端口** 即可；代理与后端之间由池完成握手并保持连接。
+
+| 步骤 | MySQL | PostgreSQL |
+|------|--------|--------------|
+| 1. 构建 | `cmake .. && make`；无需 OpenSSL 也可连 `mysql_native_password` / 部分 `caching_sha2` 场景 | 需 **CMake 找到 OpenSSL**（否则不会编译 PG 池）；`pg_hba` 常见为 **SCRAM-SHA-256** |
+| 2. 选配置 | `conf/proxy.mysql.conf`（代理默认 **6033** → 后端 **3306**） | `conf/proxy.postgresql.conf`（代理 **6432** → 后端 **5432**，与 MySQL 代理可同时起两个进程） |
+| 3. 改连接信息 | 编辑对应 conf 里 `[database.primary]` 的 `host` / `port` / `user` / `password` / `database` | 同上；**本机 Homebrew** 可不写 `user`，程序用环境变量 **`USER`**；**Docker PG** 一般在 conf 里写 `user = postgres` |
+| 4. 启动 | 仓库根：`./build/db-proxy -c conf/proxy.mysql.conf`；在 `build/`：`./db-proxy -c ../conf/proxy.mysql.conf`（无 `-c` 时会自动查找 `conf/proxy.mysql.conf` 或 `../conf/proxy.mysql.conf`） | 同上，把文件名换成 `proxy.postgresql.conf` |
+| 5. 应用连接串 | 主机 = 跑代理的机器，端口 = **6033**，库名/用户/密码与直连后端一致（由池代为连后端） | 主机同上，端口 = **6432**，其余与直连 PG 一致 |
+
+**说明**：`[server] port` 为代理对外端口；`[database.primary] port` 为**真实数据库**端口。各配置键说明见下文「配置文件 `conf/` 与主程序」；示例与行内注释见 `conf/proxy.mysql.conf`、`conf/proxy.postgresql.conf`。
 
 ### 自动化测试
 
@@ -192,7 +211,13 @@ ctest -R MonitorIntegration --output-on-failure
 ctest --output-on-failure
 ```
 
-### `proxy.conf` 与主程序
+### 配置文件 `conf/` 与主程序
+
+| 文件 | 说明 |
+|------|------|
+| `conf/proxy.mysql.conf` | MySQL 后端：`protocol=mysql`，代理端口 **6033**（默认 `-c` 目标，工作目录为仓库根时）。 |
+| `conf/proxy.postgresql.conf` | PostgreSQL 后端：`protocol=postgresql`，代理端口 **6432**，日志默认 `./logs/proxy-pg.log`。**不写 `user` 时用环境变量 `USER`**（适配 Homebrew）；Docker 常见需 `user = postgres`。 |
+| `proxy.conf`（仓库根） | 仅占位说明；**请使用 `conf/` 下对应文件**，避免在两种后端间来回改同一配置。 |
 
 | 配置段 / 键 | 说明 |
 |-------------|------|
@@ -210,7 +235,7 @@ ctest --output-on-failure
 
 ### PostgreSQL 测试
 
-构建阶段需 **CMake 找到 OpenSSL** 且未关闭 `DBPROXY_ENABLE_POSTGRES`，才会生成 `examples_pg` 与池内的 `PostgreSQLConnection`；运行时与 MySQL 类似，在 `proxy.conf` 的 `[database]` 中把 `protocol` 设为 `postgresql`（或 `postgres` / `pg`）并指向可达的 PG 实例。认证侧实现支持 trust、明文密码、MD5 与 **SCRAM-SHA-256**（见 `src/pool/postgresql_connection.cpp`）。
+构建阶段需 **CMake 找到 OpenSSL** 且未关闭 `DBPROXY_ENABLE_POSTGRES`，才会生成 `examples_pg` 与池内的 `PostgreSQLConnection`；运行主程序代理 PG 时使用 **`conf/proxy.postgresql.conf`**（或自行复制后改 `protocol` 与连接信息）。认证侧实现支持 trust、明文密码、MD5 与 **SCRAM-SHA-256**（见 `src/pool/postgresql_connection.cpp`）。
 
 ```bash
 # 默认 local 模式，连接本地 PostgreSQL
