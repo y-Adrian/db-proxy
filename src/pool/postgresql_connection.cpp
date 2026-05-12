@@ -176,7 +176,7 @@ PostgreSQLConnection::~PostgreSQLConnection() {
     close();
 }
 
-bool PostgreSQLConnection::connect() {
+bool PostgreSQLConnection::connectTcpOnly() {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd_ < 0) {
         last_error_ = "Failed to create socket: " + std::string(strerror(errno));
@@ -227,6 +227,14 @@ bool PostgreSQLConnection::connect() {
         return false;
     }
 
+    return true;
+}
+
+bool PostgreSQLConnection::connect() {
+    if (!connectTcpOnly()) {
+        return false;
+    }
+
     if (!doStartup()) {
         LOG_ERROR("PostgreSQL startup failed: " + last_error_);
         close();
@@ -237,6 +245,40 @@ bool PostgreSQLConnection::connect() {
     LOG_DEBUG("PostgreSQL connection " + std::to_string(id_) + " connected to " +
               remote_host_ + ":" + std::to_string(remote_port_));
     return true;
+}
+
+void PostgreSQLConnection::hardCloseSocketNoProtocol() {
+    if (fd_ >= 0) {
+        ::shutdown(fd_, SHUT_RDWR);
+        ::close(fd_);
+        fd_ = -1;
+    }
+    state_.store(State::CLOSED);
+}
+
+bool PostgreSQLConnection::enterRawWireRelayMode() {
+    close();
+    if (!connectTcpOnly()) {
+        return false;
+    }
+    int flags = fcntl(fd_, F_GETFL, 0);
+    if (flags < 0) {
+        last_error_ = "fcntl F_GETFL failed";
+        hardCloseSocketNoProtocol();
+        return false;
+    }
+    if (fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        last_error_ = "fcntl blocking mode failed";
+        hardCloseSocketNoProtocol();
+        return false;
+    }
+    state_.store(State::IN_USE);
+    return true;
+}
+
+bool PostgreSQLConnection::restoreSessionAfterRawRelay() {
+    hardCloseSocketNoProtocol();
+    return connect();
 }
 
 bool PostgreSQLConnection::doStartup() {

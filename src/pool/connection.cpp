@@ -9,8 +9,8 @@
 #include <fcntl.h>
 #include <cstring>
 #include <algorithm>
-#include <openssl/sha.h>
-#include <openssl/evp.h>
+
+#include "crypto/sha1.h"
 
 namespace dbproxy {
 
@@ -124,13 +124,6 @@ bool isEOFPacket(const std::string& payload) {
            payload.size() < 9;
 }
 
-std::string digest(const EVP_MD* md, const std::string& data) {
-    unsigned char out[EVP_MAX_MD_SIZE];
-    unsigned int len = 0;
-    EVP_Digest(data.data(), data.size(), out, &len, md, nullptr);
-    return std::string(reinterpret_cast<char*>(out), len);
-}
-
 }  // namespace
 
 uint64_t Connection::next_id_ = 1;
@@ -147,7 +140,7 @@ Connection::~Connection() {
     close();
 }
 
-bool Connection::connect() {
+bool Connection::connectTcpOnly() {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd_ < 0) {
         LOG_ERROR("Failed to create socket: " + std::string(strerror(errno)));
@@ -198,6 +191,14 @@ bool Connection::connect() {
         return false;
     }
 
+    return true;
+}
+
+bool Connection::connect() {
+    if (!connectTcpOnly()) {
+        return false;
+    }
+
     if (!doHandshake()) {
         LOG_ERROR("MySQL handshake failed: " + last_error_);
         close();
@@ -208,6 +209,40 @@ bool Connection::connect() {
     LOG_DEBUG("MySQL connection " + std::to_string(id_) + " connected to " +
               remote_host_ + ":" + std::to_string(remote_port_));
     return true;
+}
+
+void Connection::hardCloseSocketNoProtocol() {
+    if (fd_ >= 0) {
+        ::shutdown(fd_, SHUT_RDWR);
+        ::close(fd_);
+        fd_ = -1;
+    }
+    state_.store(State::CLOSED);
+}
+
+bool Connection::enterRawWireRelayMode() {
+    close();
+    if (!connectTcpOnly()) {
+        return false;
+    }
+    int flags = fcntl(fd_, F_GETFL, 0);
+    if (flags < 0) {
+        last_error_ = "fcntl F_GETFL failed";
+        hardCloseSocketNoProtocol();
+        return false;
+    }
+    if (fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK) < 0) {
+        last_error_ = "fcntl blocking mode failed";
+        hardCloseSocketNoProtocol();
+        return false;
+    }
+    state_.store(State::IN_USE);
+    return true;
+}
+
+bool Connection::restoreSessionAfterRawRelay() {
+    hardCloseSocketNoProtocol();
+    return connect();
 }
 
 bool Connection::doHandshake() {
@@ -257,9 +292,14 @@ bool Connection::doHandshake() {
         auth_plugin_name = "mysql_native_password";
     }
 
-    std::string auth_response = auth_plugin_name == "caching_sha2_password"
-        ? makeCachingSha2Response(scramble, password_)
-        : makeAuthResponse(scramble, password_);
+    // 当前实现仅支持 mysql_native_password（SHA-1）。
+    // 若后端使用 caching_sha2_password，请在 MySQL 配置中切换到 mysql_native_password。
+    if (auth_plugin_name == "caching_sha2_password") {
+        last_error_ = "Backend auth plugin caching_sha2_password is not supported without OpenSSL. "
+                      "Please use mysql_native_password.";
+        return false;
+    }
+    std::string auth_response = makeAuthResponse(scramble, password_);
 
     uint32_t client_capabilities =
         CLIENT_LONG_PASSWORD |
@@ -338,29 +378,12 @@ std::string Connection::makeAuthResponse(const std::string& scramble,
         return "";
     }
 
-    std::string stage1 = digest(EVP_sha1(), password);
-    std::string stage2 = digest(EVP_sha1(), stage1);
-    std::string stage3 = digest(EVP_sha1(), scramble + stage2);
+    const std::string stage1 = crypto::sha1(password);
+    const std::string stage2 = crypto::sha1(stage1);
+    const std::string stage3 = crypto::sha1(scramble + stage2);
 
-    std::string token(SHA_DIGEST_LENGTH, '\0');
-    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
-        token[i] = static_cast<char>(stage1[i] ^ stage3[i]);
-    }
-    return token;
-}
-
-std::string Connection::makeCachingSha2Response(const std::string& scramble,
-                                                const std::string& password) {
-    if (password.empty()) {
-        return "";
-    }
-
-    std::string stage1 = digest(EVP_sha256(), password);
-    std::string stage2 = digest(EVP_sha256(), stage1);
-    std::string stage3 = digest(EVP_sha256(), stage2 + scramble);
-
-    std::string token(SHA256_DIGEST_LENGTH, '\0');
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+    std::string token(crypto::kSha1DigestLength, '\0');
+    for (std::size_t i = 0; i < crypto::kSha1DigestLength; ++i) {
         token[i] = static_cast<char>(stage1[i] ^ stage3[i]);
     }
     return token;
@@ -425,7 +448,11 @@ bool Connection::sendRaw(const char* data, size_t len) {
             last_error_ = "Timeout while sending to MySQL backend";
             return false;
         }
-        ssize_t n = send(fd_, data + sent, len - sent, 0);
+        int flags = 0;
+#ifdef MSG_NOSIGNAL
+        flags |= MSG_NOSIGNAL;  // 避免对端关闭导致 SIGPIPE 直接杀进程
+#endif
+        ssize_t n = send(fd_, data + sent, len - sent, flags);
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             continue;
         }

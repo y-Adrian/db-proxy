@@ -11,12 +11,10 @@ namespace dbproxy {
 class Connection;
 
 /**
- * @brief MySQL 协议处理器
- * 
- * 面试亮点：
- * - 协议状态机：处理 MySQL 连接握手流程
- * - SQL 解析基础：识别 SQL 类型
- * - 连接复用：代理后端连接复用
+ * @brief MySQL 协议处理器（简化 / 演示向）
+ *
+ * 当前 parseClientData 以「完整包」为粒度做轻量解析（如识别 COM_QUERY），
+ * **主程序代理路径不走此类**；用于示例、统计扩展或后续半协议代理。
  */
 class MySQLParser {
 public:

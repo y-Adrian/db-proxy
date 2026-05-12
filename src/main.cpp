@@ -3,9 +3,9 @@
  * @brief 数据库代理中间件 - 主程序入口
  *
  * 修复清单（相对于原始版本）：
- *   Fix-1  透明 TCP 会话代理（MySQL / PostgreSQL）：工作线程双向转发线协议
+ *   Fix-1  池化后端 + 透明 TCP 会话代理（MySQL / PostgreSQL）：工作线程从池取连接，裸 TCP 双向转发线协议，结束后恢复连接归还池
  *   Fix-2  使用 INI 配置文件（proxy.conf），不再硬编码参数
- *   Fix-3  后台线程改用 std::jthread + std::stop_token，保证优雅退出
+ *   Fix-3  健康检查与统计后台线程使用 std::jthread + std::stop_token；会话工作线程池仍为 std::thread
  *   Fix-4  新增 RequestWorkerPool，将阻塞式后端 I/O 移出 epoll 事件循环
  */
 
@@ -31,6 +31,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 using namespace dbproxy;
 
@@ -159,6 +160,8 @@ int main(int argc, char* argv[]) {
 
     const auto& primary_db = config.databases[0];
     const std::string pool_name = "default";
+    const auto pool_acquire_timeout =
+        std::chrono::milliseconds(config.pool.connection_timeout_ms);
     const bool backend_is_pg = isPostgresWireProtocol(primary_db.protocol);
     const BackendProtocol pool_proto =
         backend_is_pg ? BackendProtocol::PostgreSQL : BackendProtocol::MySQL;
@@ -181,7 +184,7 @@ int main(int argc, char* argv[]) {
                   primary_db.host, primary_db.port, primary_db.database);
         return 1;
     }
-    LOG_INFO("Backend wire protocol: {} (transparent TCP session relay)",
+    LOG_INFO("Backend wire protocol: {} (pooled backend + transparent wire relay per client)",
              backend_is_pg ? "PostgreSQL" : "MySQL");
     LOG_INFO("Pool '{}' → {}:{}/{} (min={} max={})",
              pool_name, primary_db.host, primary_db.port, primary_db.database,
@@ -201,27 +204,33 @@ int main(int argc, char* argv[]) {
     }
 
     g_server->setConnectionCallback(
-        [&workers, host = std::string(primary_db.host), port = primary_db.port](auto conn) {
+        [&workers, pool_name, pool_acquire_timeout](auto conn) {
             LOG_DEBUG("New connection: {}:{}", conn->remoteIp(), conn->remotePort());
             METRICS_INC("connections_total");
-            METRICS_GAUGE_SET("active_connections",
-                Metrics::instance().getGauge("active_connections") + 1);
+            Metrics::instance().incrementGauge("active_connections");
 
             if (!g_server) {
+                Metrics::instance().decrementGauge("active_connections");
                 return;
             }
             auto taken = g_server->takeConnection(conn->fd());
             if (!taken) {
                 LOG_ERROR("Internal error: takeConnection failed for fd {}", conn->fd());
-                METRICS_GAUGE_SET("active_connections",
-                    Metrics::instance().getGauge("active_connections") - 1);
+                Metrics::instance().decrementGauge("active_connections");
                 return;
             }
             const int cfd = taken->releaseFd();
-            workers->post([cfd, host, port]() {
-                runTransparentTcpSessionRelay(cfd, host, port);
-                METRICS_GAUGE_SET("active_connections",
-                    Metrics::instance().getGauge("active_connections") - 1);
+            workers->post([cfd, pool_name, pool_acquire_timeout]() {
+                auto backend = PoolManager::instance().getConnection(pool_name, pool_acquire_timeout);
+                if (!backend) {
+                    LOG_ERROR("Pooled backend acquire failed (pool exhausted or timeout)");
+                    ::close(cfd);
+                    Metrics::instance().decrementGauge("active_connections");
+                    return;
+                }
+                runPooledTransparentSessionRelay(cfd, backend);
+                PoolManager::instance().returnConnection(pool_name, backend);
+                Metrics::instance().decrementGauge("active_connections");
             });
         });
 

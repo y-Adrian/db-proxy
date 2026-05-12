@@ -12,12 +12,9 @@
 namespace dbproxy {
 
 /**
- * @brief 连接池管理器 - 支持多数据库
- * 
- * 面试亮点：
- * - 读写锁保护：读多写少场景优化
- * - 数据库分片支持
- * - 连接路由：根据 SQL 类型选择只读/读写池
+ * @brief 多命名连接池单例
+ *
+ * 维护 name → ConnectionPool；`main` 当前仅注册默认池。路由扩展（按 SQL/只读等）为预留方向。
  */
 class PoolManager {
 public:

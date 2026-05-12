@@ -1,7 +1,10 @@
 #include "pool/connection_pool.h"
-#include "pool/postgresql_connection.h"
 #include "core/logger.h"
 #include <chrono>
+
+#if DBPROXY_ENABLE_POSTGRES
+#include "pool/postgresql_connection.h"
+#endif
 
 namespace dbproxy {
 
@@ -37,7 +40,12 @@ ConnectionPool::~ConnectionPool() {
 ConnectionPtr ConnectionPool::createConnection() {
     ConnectionPtr conn;
     if (protocol_ == BackendProtocol::PostgreSQL) {
+#if DBPROXY_ENABLE_POSTGRES
         conn = std::make_shared<PostgreSQLConnection>(host_, port_, username_, password_, database_);
+#else
+        LOG_ERROR("PostgreSQL support is disabled in this build (missing OpenSSL)");
+        return nullptr;
+#endif
     } else {
         conn = std::make_shared<Connection>(host_, port_, username_, password_, database_);
     }

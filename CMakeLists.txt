@@ -6,7 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
+
+# OpenSSL 用于 PostgreSQL SCRAM/MD5、MySQL caching_sha2 等高级认证。
+# 为了在最小环境也能编译（先打通 MySQL mysql_native_password），这里把 OpenSSL 设为可选。
+option(DBPROXY_ENABLE_POSTGRES "Enable PostgreSQL backend connection implementation" ON)
+find_package(OpenSSL QUIET)
+if (NOT OpenSSL_FOUND AND DBPROXY_ENABLE_POSTGRES)
+    message(WARNING "OpenSSL not found; disabling PostgreSQL support for this build.")
+    set(DBPROXY_ENABLE_POSTGRES OFF)
+endif()
 
 # 编译器优化选项
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -Wall -Wextra")
@@ -20,6 +28,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 set(CORE_SOURCES
     src/core/logger.cpp
     src/core/config.cpp
+    src/crypto/sha1.cpp
 )
 
 set(NETWORK_SOURCES
@@ -38,10 +47,16 @@ set(PROTOCOL_SOURCES
 
 set(POOL_SOURCES
     src/pool/connection.cpp
-    src/pool/postgresql_connection.cpp
     src/pool/connection_pool.cpp
     src/pool/pool_manager.cpp
 )
+
+if (DBPROXY_ENABLE_POSTGRES)
+    add_compile_definitions(DBPROXY_ENABLE_POSTGRES=1)
+    list(APPEND POOL_SOURCES src/pool/postgresql_connection.cpp)
+else()
+    add_compile_definitions(DBPROXY_ENABLE_POSTGRES=0)
+endif()
 
 set(MONITOR_SOURCES
     src/monitor/metrics.cpp
@@ -78,12 +93,23 @@ enable_testing()
 add_executable(test_pool tests/test_connection_pool.cpp ${POOL_SOURCES} ${CORE_SOURCES})
 add_test(NAME PoolTest COMMAND test_pool)
 
+add_executable(test_pooled_session_relay
+    tests/test_pooled_session_relay.cpp
+    src/protocol/transparent_session_relay.cpp
+    src/core/logger.cpp
+    src/core/config.cpp
+)
+add_test(NAME PooledSessionRelayTest COMMAND test_pooled_session_relay)
+target_link_libraries(test_pooled_session_relay PRIVATE Threads::Threads)
+
 # 性能测试
 add_executable(bench_pool benchmarks/bench_connection_pool.cpp ${POOL_SOURCES} ${CORE_SOURCES})
 
 # 场景化用例
 add_executable(examples examples/examples.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
-add_executable(examples_pg examples/examples_pg.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
+if (DBPROXY_ENABLE_POSTGRES)
+    add_executable(examples_pg examples/examples_pg.cpp ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
+endif()
 
 # CLI 工具
 add_executable(dbcli ${CLI_SOURCES} ${POOL_SOURCES} ${MONITOR_SOURCES} ${CORE_SOURCES})
@@ -101,11 +127,24 @@ add_executable(diagnostics_demo
 )
 
 # 链接库
-target_link_libraries(db-proxy PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(dbcli PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(examples PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(examples_pg PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(stress_test PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(test_pool PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(bench_pool PRIVATE Threads::Threads OpenSSL::Crypto)
-target_link_libraries(diagnostics_demo PRIVATE Threads::Threads OpenSSL::Crypto)
+target_link_libraries(db-proxy PRIVATE Threads::Threads)
+target_link_libraries(dbcli PRIVATE Threads::Threads)
+target_link_libraries(examples PRIVATE Threads::Threads)
+if (TARGET examples_pg)
+    target_link_libraries(examples_pg PRIVATE Threads::Threads)
+endif()
+target_link_libraries(stress_test PRIVATE Threads::Threads)
+target_link_libraries(test_pool PRIVATE Threads::Threads)
+target_link_libraries(bench_pool PRIVATE Threads::Threads)
+target_link_libraries(diagnostics_demo PRIVATE Threads::Threads)
+
+if (OpenSSL_FOUND)
+    foreach(t db-proxy dbcli examples stress_test test_pool test_pooled_session_relay bench_pool diagnostics_demo)
+        if (TARGET ${t})
+            target_link_libraries(${t} PRIVATE OpenSSL::Crypto)
+        endif()
+    endforeach()
+    if (TARGET examples_pg)
+        target_link_libraries(examples_pg PRIVATE OpenSSL::Crypto)
+    endif()
+endif()

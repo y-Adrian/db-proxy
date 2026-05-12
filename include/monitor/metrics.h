@@ -16,12 +16,9 @@ namespace dbproxy {
 
 /**
  * @brief 指标收集器
- * 
- * 面试亮点：
- * - 无锁计数器：使用原子变量减少锁竞争
- * - 滑动窗口：计算 QPS/TPS
- * - 延迟直方图：P50/P90/P99/P999
- * - 可观测性：Prometheus 格式输出
+ *
+ * - 计数器、Gauge、直方图；可导出 **Prometheus 文本**（`toPrometheusFormat()`）。
+ * - 主程序 `db-proxy` 仅部分更新指标；**无**内置 HTTP scrape 端点，需由调用方拉取或落盘。
  */
 class Metrics {
 public:

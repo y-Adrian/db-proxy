@@ -12,12 +12,9 @@
 namespace dbproxy {
 
 /**
- * @brief MySQL 数据库连接封装
- * 
- * 面试亮点：
- * - 连接生命周期管理：创建、校验、心跳、归还
- * - 智能指针 + 引用计数：防止连接泄漏
- * - 非阻塞 IO：使用 poll/select 检测连接状态
+ * @brief MySQL 后端连接（握手、ping、简单查询与原始收发）
+ *
+ * 套接字在池内操作为非阻塞 + `select` 等待；`enterRawWireRelayMode` 将会话侧切为阻塞以便与透明中继配合。
  */
 class Connection : public BackendConnection, public std::enable_shared_from_this<Connection> {
 public:
@@ -67,13 +64,17 @@ public:
     void addRef() override { ref_count_.fetch_add(1); }
     void releaseRef() override { ref_count_.fetch_sub(1); }
 
+    bool enterRawWireRelayMode() override;
+    bool restoreSessionAfterRawRelay() override;
+
 private:
+    bool connectTcpOnly();
+    void hardCloseSocketNoProtocol();
+
     bool doHandshake();
     bool recvResult();
     std::string makeAuthResponse(const std::string& scramble,
                                  const std::string& password);
-    std::string makeCachingSha2Response(const std::string& scramble,
-                                        const std::string& password);
     bool readPacket(std::string& payload, uint8_t* sequence_id = nullptr,
                     std::chrono::milliseconds timeout = std::chrono::seconds(5));
     bool writePacket(const std::string& payload, uint8_t sequence_id);

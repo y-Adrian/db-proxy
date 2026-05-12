@@ -61,6 +61,16 @@ public:
     virtual int refCount() const = 0;
     virtual void addRef() = 0;
     virtual void releaseRef() = 0;
+
+    /**
+     * 关闭当前应用层会话，与后端建立一条仅 TCP（未走 DB 握手）的连接，
+     * 用于主代理路径上把客户端线协议原样透传到数据库。
+     * 成功后可对 fd() 与客户端做字节级双向中继；结束时应调用 restoreSessionAfterRawRelay()。
+     */
+    virtual bool enterRawWireRelayMode() = 0;
+
+    /** 结束透传后恢复为池内可用的已认证连接（失败时连接对象可能处于断开状态）。 */
+    virtual bool restoreSessionAfterRawRelay() = 0;
 };
 
 using BackendConnectionPtr = std::shared_ptr<BackendConnection>;

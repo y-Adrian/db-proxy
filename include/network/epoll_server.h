@@ -13,13 +13,11 @@ class EventLoop;
 class TcpConnection;
 
 /**
- * @brief 基于 epoll 的高性能 TCP 服务器
- * 
- * 面试亮点：
- * - 使用 epoll LT/ET 模式实现高效 IO 多路复用
- * - 支持边缘触发(ET)模式减少系统调用
- * - 非阻塞 IO + 边缘触发：实现 Reactor 模型
- * - 支持高并发连接（万级）
+ * @brief 监听侧 TCP 服务器（Linux: epoll；其它平台: select 回退）
+ *
+ * - Linux：监听与已接入连接注册 epoll，边缘触发 (ET) 读事件。
+ * - 非 Linux：select 轮询；与 Linux 路径在「客户端 fd 管理方式」上略有差异。
+ * - 新连接建立后由 setConnectionCallback 处理；主程序中通常会 takeConnection 后交给工作线程。
  */
 class EpollServer {
 public:

@@ -10,13 +10,9 @@
 namespace dbproxy {
 
 /**
- * @brief TCP 连接封装
- * 
- * 面试亮点：
- * - 非阻塞 IO：使用 O_NONBLOCK 设置非阻塞模式
- * - 零拷贝思路：使用 buffer 减少内存拷贝
- * - 连接生命周期管理：引用计数
- * - write buffer 设计：应对对端处理慢的场景
+ * @brief 客户端侧 TCP 封装（监听 accept 后使用）
+ *
+ * 非阻塞读写与写缓冲；`releaseFd` 用于将 fd 交给工作线程做阻塞式透明中继。
  */
 class TcpConnection : public std::enable_shared_from_this<TcpConnection> {
 public:

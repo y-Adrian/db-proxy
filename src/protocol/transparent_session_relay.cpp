@@ -16,7 +16,7 @@
 
 namespace dbproxy {
 
-namespace {
+namespace detail {
 
 bool setBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -77,20 +77,18 @@ int connectTcpBackend(const std::string& host, uint16_t port, std::string& err) 
     return fd;
 }
 
-}  // namespace
+}  // namespace detail
 
-void runTransparentTcpSessionRelay(int client_fd, const std::string& host, uint16_t port) {
-    std::string err;
-    const int backend_fd = connectTcpBackend(host, port, err);
-    if (backend_fd < 0) {
-        LOG_ERROR("Transparent session relay: cannot connect backend {}:{} — {}", host, port, err);
-        ::close(client_fd);
-        return;
-    }
-
-    if (!setBlocking(client_fd) || !setBlocking(backend_fd)) {
+/**
+ * @param close_backend_socket_when_done 为 true 时关闭 backend_fd（独立 connect 场景）；
+ *        为 false 时仅 shutdown(backend_fd)，由 BackendConnection::restoreSessionAfterRawRelay() 负责 close。
+ */
+static void tcpRelayBidirectionalBlocking(int client_fd, int backend_fd, bool close_backend_socket_when_done) {
+    if (!detail::setBlocking(client_fd) || !detail::setBlocking(backend_fd)) {
         LOG_ERROR("Transparent session relay: fcntl failed");
-        ::close(backend_fd);
+        if (close_backend_socket_when_done) {
+            ::close(backend_fd);
+        }
         ::close(client_fd);
         return;
     }
@@ -132,7 +130,7 @@ void runTransparentTcpSessionRelay(int client_fd, const std::string& host, uint1
             if (n <= 0) {
                 break;
             }
-            if (!sendAll(backend_fd, buf.data(), static_cast<size_t>(n))) {
+            if (!detail::sendAll(backend_fd, buf.data(), static_cast<size_t>(n))) {
                 break;
             }
         }
@@ -142,17 +140,49 @@ void runTransparentTcpSessionRelay(int client_fd, const std::string& host, uint1
             if (n <= 0) {
                 break;
             }
-            if (!sendAll(client_fd, buf.data(), static_cast<size_t>(n))) {
+            if (!detail::sendAll(client_fd, buf.data(), static_cast<size_t>(n))) {
                 break;
             }
         }
     }
 
     ::shutdown(client_fd, SHUT_RDWR);
-    ::shutdown(backend_fd, SHUT_RDWR);
-    ::close(backend_fd);
     ::close(client_fd);
+    ::shutdown(backend_fd, SHUT_RDWR);
+    if (close_backend_socket_when_done) {
+        ::close(backend_fd);
+    }
     LOG_DEBUG("Transparent TCP session relay ended");
+}
+
+void runTransparentTcpSessionRelay(int client_fd, const std::string& host, uint16_t port) {
+    std::string err;
+    const int backend_fd = detail::connectTcpBackend(host, port, err);
+    if (backend_fd < 0) {
+        LOG_ERROR("Transparent session relay: cannot connect backend {}:{} — {}", host, port, err);
+        ::close(client_fd);
+        return;
+    }
+
+    tcpRelayBidirectionalBlocking(client_fd, backend_fd, true);
+}
+
+void runPooledTransparentSessionRelay(int client_fd, BackendConnectionPtr backend) {
+    if (!backend) {
+        LOG_ERROR("Pooled transparent relay: null backend connection");
+        ::close(client_fd);
+        return;
+    }
+    if (!backend->enterRawWireRelayMode()) {
+        LOG_ERROR("Pooled transparent relay: enterRawWireRelayMode failed: {}", backend->lastError());
+        ::close(client_fd);
+        return;
+    }
+    const int bfd = backend->fd();
+    tcpRelayBidirectionalBlocking(client_fd, bfd, false);
+    if (!backend->restoreSessionAfterRawRelay()) {
+        LOG_WARN("Pooled transparent relay: restoreSessionAfterRawRelay failed: {}", backend->lastError());
+    }
 }
 
 }  // namespace dbproxy

@@ -6,6 +6,7 @@
 
 namespace dbproxy {
 
+/** PostgreSQL 后端连接；池内为非阻塞 IO，`enterRawWireRelayMode` 切阻塞供透明中继。 */
 class PostgreSQLConnection : public BackendConnection,
                              public std::enable_shared_from_this<PostgreSQLConnection> {
 public:
@@ -47,7 +48,13 @@ public:
     void addRef() override { ref_count_.fetch_add(1); }
     void releaseRef() override { ref_count_.fetch_sub(1); }
 
+    bool enterRawWireRelayMode() override;
+    bool restoreSessionAfterRawRelay() override;
+
 private:
+    bool connectTcpOnly();
+    void hardCloseSocketNoProtocol();
+
     bool doStartup();
     bool handleAuthentication(int32_t auth_type, const std::string& payload);
     bool handleCleartextPassword();

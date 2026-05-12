@@ -1,6 +1,20 @@
 # DB-Proxy: 高性能数据库连接池代理中间件
 
-基于 C++20 的高性能数据库连接池/代理中间件，同时支持 MySQL 和 PostgreSQL 协议。
+基于 C++20 的数据库连接池与 TCP 代理组件库；主程序 `db-proxy` 对客户端提供 **MySQL / PostgreSQL 原生线协议** 的透明端口转发，并与连接池集成以做预热、健康检查与**并发会话数**约束。
+
+---
+
+## 主程序 `db-proxy` 在做什么（与文档其它章节的关系）
+
+| 环节 | 实际实现 |
+|------|----------|
+| 客户端接入 | Linux 下 **epoll（ET）+ 非阻塞 accept**；非 Linux 下为 **select** 回退。`[server] max_connections` / `backlog` 当前**未**接入监听路径（见下方「配置项」）。 |
+| 每客户端会话 | 固定大小 **工作线程池**：从 `PoolManager` **借出一条池内连接**，对该连接执行 `COM_QUIT` / `Terminate` 后，再与后端建立**裸 TCP**，在客户端与该 TCP 之间做 **阻塞 `poll` + `recv`/`send` 双向字节透传**；会话结束后 **重新握手** 并归还连接池。 |
+| 「连接复用」含义 | **不是**把「已握手的数据库连接」直接转给多个客户端复用（线协议不允许）。池化用于：**限制同时透传的会话数**（与 `[pool] max_connections` 一致）、**预热与健康检查**；每条客户端会话在后端仍为**独立线协议会话**（先裸 TCP再完整握手）。 |
+| 协议解析 | 主路径**不做** SQL/报文级解析；`include/protocol/`、`mysql_relay` 等供 **examples / dbcli / 测试** 或后续扩展使用。 |
+| 监控 | `Metrics` 提供 **Prometheus 文本格式**（`toPrometheusFormat()`）；主程序当前主要更新连接类计数，**无内置 HTTP `/metrics` 拉取端点**；`[monitor]` 中部分键已解析，**尚未**全部接入主循环。 |
+
+以下「核心价值」中关于**应用直连连接池**（不经代理字节透传）的描述，仍适用于 `examples`、`dbcli`、`ConnectionPool` 等库用法。
 
 ---
 
@@ -15,81 +29,78 @@
 
 ### 方法
 
-**连接池 + 多协议代理架构**
+**连接池组件 + 主程序代理架构**
 
 ```
-Client → DB-Proxy (连接池) → MySQL/PostgreSQL
-         ↓
-    epoll 非阻塞 IO
-    协议解析
-    连接复用
+Client ──线协议──► DB-Proxy (accept: epoll/select)
+                      │
+                      ├─► 工作线程: 池化槽位 + 裸 TCP 透传 ──► MySQL / PostgreSQL
+                      │
+                      └─► 后台: 池预热 / 健康检查 / 日志统计
 ```
 
-### 解决
+### 解决（组件能力）
 
 | 技术点 | 实现 |
 |--------|------|
-| 连接复用 | 池化空闲连接，线程安全获取/归还 |
-| 预热机制 | 启动时创建最小连接数，避免冷启动延迟 |
-| 健康检测 | 定时 ping 检测，失效连接自动重建 |
-| 协议解析 | 纯 C++ 实现 MySQL/PG 协议，无需原生客户端库 |
-| 非阻塞 IO | epoll ET 模式 + Reactor 模型，万级并发 |
+| 连接池（库） | 线程安全获取/归还、上限与等待超时、空闲剔除 |
+| 预热与健康 | 启动 `warmup`、定时 `ping`、失效连接剔除与补充 |
+| 代理主路径 | **字节级透明**转发整条 TCP 会话（含握手与业务流量） |
+| 协议实现（库） | 纯 C++ MySQL/PG 客户端侧协议，无 libmysqlclient（供示例与工具） |
+| 监听侧 IO | Linux：**epoll ET + 非阻塞**；其它平台：**select** 回退 |
 
-### 效果
+### 效果（设计目标 / 直连池场景）
 
-- **延迟降低**：连接获取从 10-50ms 降至 <1ms
-- **吞吐提升**：连接复用减少数据库压力，支持更高并发
-- **资源节省**：避免连接频繁创建销毁的内存抖动
+- 在 **应用代码直连 `ConnectionPool`** 的场景下，可显著减少反复握手带来的开销（具体数值取决于硬件与负载）。
+- 主程序路径侧重 **多会话并发下的槽位与线程模型**；若需「单 TCP 多查询复用」请使用库式连接池而非代理字节流本身。
 
 ---
 
 ## 技术架构
 
-### 解决的问题：高频短查询场景下的连接开销
+### 高频短查询与连接开销（直连池）
 
-**问题**：每次查询都建立新连接，网络 RTT + 认证耗时占比高
+**问题**：若业务为「每条 SQL 新建 TCP + 握手」，RTT 与认证占比高。
 
-**方法**：连接池预创建 N 个连接，按需分配
+**方法**：使用本仓库提供的 `ConnectionPool` 在进程内持有已认证连接。
 
-**解决**：查询时直接从池中获取可用连接，用完归还
+**解决**：业务线程 `getConnection` / `returnConnection` 复用同一条后端连接发多条语句。
 
-**效果**：P99 查询延迟从 45ms 降至 12ms
-
----
-
-### 解决的问题：多语言/多框架访问不同数据库
-
-**问题**：各语言需要各自的数据库驱动，协议差异难以统一处理
-
-**方法**：实现 MySQL/PostgreSQL 协议解析层，对外提供统一接口
-
-**解决**：客户端只需实现 HTTP/WebSocket 等通用协议，DB-Proxy 负责数据库通信
-
-**效果**：一个代理层支持 MySQL 和 PostgreSQL，减少客户端复杂度
+**效果**：视环境而定；代理主路径不替代该用法。
 
 ---
 
-### 解决的问题：C10K/C100K 并发连接
+### 多协议与统一出口
 
-**问题**：传统线程池模式每个连接占用一个线程，上下文切换开销大
+**问题**：不同业务连 MySQL 或 PostgreSQL，运维上希望统一端口与配置。
 
-**方法**：单线程 Reactor 模型 + epoll 非阻塞 IO
+**方法**：`db-proxy` 按配置选择后端线协议，对客户端保持 **与直连数据库相同的 TCP 协议**。
 
-**解决**：一个线程处理所有 IO 事件，无锁竞争
+**解决**：应用仍使用现有 **MySQL / PostgreSQL 驱动**，将连接串指向代理监听地址即可。
 
-**效果**：单实例支持万级并发连接，CPU 利用率高
+**效果**：同一代理进程可指向 MySQL 或 PG 后端（由 `protocol` 配置决定）。
 
 ---
 
-### 解决的问题：数据库连接泄露
+### 并发模型
 
-**问题**：应用异常时忘记释放连接，导致可用连接耗尽
+**问题**：高并发下 accept 与业务处理如何分工。
 
-**方法**：RAII 风格的连接管理 + 超时机制
+**方法**：监听与 accept 在 **Reactor 单线程**（`EpollServer::start`）；每个新连接 `takeConnection` 后交给 **有限个工作线程**，在线程内对单会话做 **阻塞式双向中继**。
 
-**解决**：连接借出后自动追踪，超时强制回收
+**解决**：避免在 epoll 线程内执行阻塞 `recv`/`send`；并发会话数受 **工作线程数** 与 **连接池上限** 共同影响。
 
-**效果**：服务长期运行无连接泄露，稳定性提升
+**效果**：结构清晰；极端高并发时需调大 `[pool] max_connections` 与 `worker_threads` 并评估线程与 FD 资源。
+
+---
+
+### 连接生命周期
+
+**问题**：应用异常时未归还池连接会导致池耗尽。
+
+**方法**：池内 `returnConnection` / `removeConnection` 与超时等待；代理路径在会话线程结束时 **归还并重连** 槽位。
+
+**解决**：会话与池槽位一一绑定在借还周期内，避免泄漏。
 
 ---
 
@@ -98,23 +109,23 @@ Client → DB-Proxy (连接池) → MySQL/PostgreSQL
 | 领域 | 技术 |
 |------|------|
 | 语言 | C++20 |
-| 网络 | epoll LT/ET, 非阻塞 IO, Reactor 模型 |
-| 数据库 | MySQL 协议, PostgreSQL 协议, 连接池 |
-| 并发 | 多线程, 原子操作, 条件变量, RAII |
-| 监控 | Prometheus 格式, 滑动窗口, P50/P90/P99 百分位 |
+| 网络 | Linux: **epoll ET + 非阻塞 accept**；会话内阻塞 `poll` 透传；非 Linux: **select** 回退 |
+| 数据库 | MySQL / PostgreSQL **线协议**（代理透传 + 库内协议栈） |
+| 并发 | 工作线程池、`std::jthread` 后台健康/统计、原子与互斥 |
+| 监控 | `Metrics`：**Prometheus 文本** API；主程序为轻量计数，**无内置 scrape HTTP** |
 
 ## 核心模块
 
 ```
 db-proxy/
 ├── include/
-│   ├── core/          # 核心配置和日志
-│   ├── network/       # epoll 网络层
-│   ├── protocol/      # MySQL/PostgreSQL 协议解析
-│   ├── pool/          # 连接池管理
-│   └── monitor/       # 性能监控
+│   ├── core/          # 配置、日志
+│   ├── network/       # epoll/select 监听与 TcpConnection
+│   ├── protocol/      # 透明中继、MySQL 包/中继（主程序透传；解析供示例与扩展）
+│   ├── pool/          # 连接池与后端连接封装
+│   └── monitor/       # Metrics / Statistics（主程序部分接入）
 └── src/
-    ├── main.cpp       # 主程序入口
+    ├── main.cpp       # 主程序：池化槽位 + 工作线程 + 透明会话中继
     └── ...
 ```
 
@@ -132,14 +143,15 @@ make -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
 cd ..
 
 # 编译完成后，所有二进制在 build/ 下：
-#   build/db-proxy       主程序
-#   build/examples        MySQL 场景化用例
-#   build/examples_pg    PostgreSQL 场景化用例
-#   build/test_pool      单元测试
-#   build/bench_pool     性能测试
-#   build/stress_test    压力测试
-#   build/dbcli          CLI 工具
-#   build/diagnostics_demo  诊断模块示例
+#   build/db-proxy                 主程序（池化 + 透明线协议代理）
+#   build/examples                 MySQL 场景化用例
+#   build/examples_pg              PostgreSQL 场景化用例（可选 OpenSSL）
+#   build/test_pool                连接池集成测试（需本地 MySQL）
+#   build/test_pooled_session_relay  中继单元测试（仅本机，无需数据库）
+#   build/bench_pool               性能测试
+#   build/stress_test              压力测试
+#   build/dbcli                    CLI 工具
+#   build/diagnostics_demo         诊断模块示例
 ```
 
 ### 运行主程序
@@ -147,7 +159,30 @@ cd ..
 ```bash
 cd build
 ./db-proxy
+# 或指定配置：
+# ./db-proxy -c /path/to/proxy.conf
 ```
+
+### 自动化测试
+
+```bash
+cd build
+# 仅跑中继相关单测（不依赖 MySQL）
+./test_pooled_session_relay
+ctest -R PooledSessionRelay --output-on-failure
+
+# 全部 CTest（含 test_pool，需本机 MySQL 才可能通过）
+ctest --output-on-failure
+```
+
+### `proxy.conf` 与主程序
+
+| 配置段 / 键 | 说明 |
+|-------------|------|
+| `[server] max_connections`、`backlog` | 已由 `loadConfig` 解析，**监听与 accept 路径尚未使用**（见 `EpollServer::listen`）。 |
+| `[pool] max_connections` | **已使用**：与主程序并发透传会话数一致（池借出即占用槽位）。 |
+| `[pool] connection_timeout_ms` | **已使用**：`getConnection` 等待空闲槽位的超时。 |
+| `[monitor]`* | 已解析；**主程序未**按间隔暴露 Prometheus HTTP 或慢查询日志（透传路径无 SQL 解析）。 |
 
 ---
 
