@@ -169,6 +169,25 @@ cd build
 # ./db-proxy -c ../conf/proxy.postgresql.conf
 ```
 
+### 智能诊断示例（Ollama）
+
+`build/diagnostics_demo` 会组装 `Statistics` / `Metrics` 快照，经 **`DiagnosticEngine`** 调用本地 **Ollama**（`/api/chat`，默认模型 **`qwen2.5-coder:7b`**），生成控制台报告并写入 `build/diagnostics/reports/`（Markdown / JSON）。
+
+```bash
+cd build
+# 需本机已启动 Ollama 且已拉取模型，例如：ollama pull qwen2.5-coder:7b
+./diagnostics_demo mock
+./diagnostics_demo ollama
+./diagnostics_demo ollama --model qwen2.5-coder:7b --timeout 180
+
+# 可选环境变量（命令行 --url / --model 优先覆盖）
+export OLLAMA_HOST=127.0.0.1:11434          # 或完整 URL，如 http://192.168.1.10:11434
+export OLLAMA_MODEL=qwen2.5-coder:7b
+./diagnostics_demo ollama
+```
+
+程序启动时会初始化 **`Logger`**，`OllamaProvider` 等模块的 `LOG_*` 会出现在标准输出，便于排查请求与解析问题。
+
 ### db-proxy 使用方式（MySQL / PostgreSQL）
 
 **在做什么**：每个 `db-proxy` 进程根据所选 INI **只连一种后端线协议**（`[database.primary]` 里的 `protocol`）。客户端仍使用**普通 MySQL 或 PostgreSQL 驱动**，把连接目标改成 **代理监听地址与端口** 即可；代理与后端之间由池完成握手并保持连接。
