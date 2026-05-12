@@ -4,6 +4,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <functional>
 
 namespace dbproxy {
 
@@ -58,7 +59,9 @@ void Statistics::recordQuery(const std::string& sql, const std::string& type,
     stats.min_latency_ms = std::min(stats.min_latency_ms, latency_ms);
     stats.avg_latency_ms = static_cast<double>(stats.total_latency_ms) / stats.count;
     
-    auto key = type + ":" + database;
+    // 按「类型 + 库 + SQL 指纹」聚合，避免不同语句被合并成一条误导诊断与 Top 列表
+    const std::size_t sql_fp = std::hash<std::string>{}(sql);
+    auto key = type + ":" + database + ":" + std::to_string(sql_fp);
     auto it = query_stats_.find(key);
     if (it == query_stats_.end()) {
         query_stats_[key] = stats;
